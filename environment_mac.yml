@@ -1,0 +1,38 @@
+name: af3
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pytorch::pytorch
+  - torchvision
+  # plotting + notebooks
+  - matplotlib
+  - ipykernel
+  - nbformat
+  - nbconvert
+  - py3dmol
+  # chemistry / structure I/O
+  - rdkit
+  - biopython
+  - biotite
+  - modelcif
+  - gemmi
+  - pdbeccdutils
+  # numerics
+  - scipy
+  - pandas
+  - scikit-learn
+  - scikit-learn-extra
+  - numpy>=2
+  - networkx
+  # config / utilities
+  - ml-collections
+  - pyyaml
+  - tqdm
+  - ipywidgets
+  - icecream
+  - ipdb
+  - pip:
+    - fair-esm==2.0.0
