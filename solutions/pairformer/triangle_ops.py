@@ -497,47 +497,49 @@ class OuterProductMean(nn.Module):
     ) -> torch.Tensor:
         """
         Args:
-            m:
-                [*, N_seq, N_res, C_m] MSA embedding
-            mask:
-                [*, N_seq, N_res] MSA mask
+            m:    [*, N_seq, N_res, C_m] MSA embedding.
+            mask: [*, N_seq, N_res]      MSA mask.
+
         Returns:
-            [*, N_res, N_res, C_z] pair embedding update
+            [*, N_res, N_res, C_z] pair-embedding update.
         """
+        ##########################################################################
+        # TODO: OuterProductMean — communicate MSA info into the pair channel.   #
+        #   1. LayerNorm m -> ln, mask it via linear_1(ln) and linear_2(ln).     #
+        #   2. Transpose so that the N_seq dim is contracted: a/b ->            #
+        #      [*, N_res, N_seq, C].                                             #
+        #   3. Outer product over C: outer = einsum('...bac,...dae->...bdce').  #
+        #   4. Normalize by mask^2 sum + eps.                                    #
+        # TODO: OuterProductMean —— 把 MSA 信息汇入 pair 通道。                 #
+        #   1. LayerNorm m -> ln，linear_1/linear_2 投影并按 mask 掩。           #
+        #   2. 把 N_seq 维转到内层: a/b 形状变成 [*, N_res, N_seq, C]。          #
+        #   3. 沿 C 做外积: outer = einsum('...bac,...dae->...bdce')。           #
+        #   4. 用 mask 内积 + eps 做归一化。                                     #
+        ##########################################################################
+
         if mask is None:
             mask = m.new_ones(m.shape[:-1])
 
-        # [*, N_seq, N_res, C_m]
         ln = self.layer_norm(m)
-
-        # [*, N_seq, N_res, C]
         mask = mask.unsqueeze(-1)
-        a = self.linear_1(ln)
-        a = a * mask
-
-        b = self.linear_2(ln)
-        b = b * mask
-
+        a = self.linear_1(ln) * mask
+        b = self.linear_2(ln) * mask
         del ln
 
         a = a.transpose(-2, -3)
         b = b.transpose(-2, -3)
 
-        if chunk_size is not None:
-            outer = self._chunk(a, b, chunk_size)
-        else:
-            outer = self._opm(a, b)
+        outer = self._chunk(a, b, chunk_size) if chunk_size is not None else self._opm(a, b)
 
-        # [*, N_res, N_res, 1]
-        norm = torch.einsum("...abc,...adc->...bdc", mask, mask)
-        norm = norm + self.eps
-
-        # [*, N_res, N_res, C_z]
+        norm = torch.einsum("...abc,...adc->...bdc", mask, mask) + self.eps
         if inplace_safe:
             outer /= norm
         else:
             outer = outer / norm
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return outer
 
     def forward(

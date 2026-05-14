@@ -412,13 +412,14 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         _add_with_inplace: bool = False,
         _inplace_chunk_size: Optional[int] = 256,
     ) -> torch.Tensor:
-        """Pure-PyTorch triangle multiplicative update (Algorithms 11/12).
+        """Triangle multiplicative update (Algorithms 11/12).
 
         Args:
-            z:    [*, N_res, N_res, C_z] pair representation
-            mask: [*, N_res, N_res]      optional pair mask
+            z:    [*, N_res, N_res, C_z] pair representation.
+            mask: [*, N_res, N_res]      optional pair mask.
+
         Returns:
-            [*, N_res, N_res, C_z] updated pair representation
+            [*, N_res, N_res, C_z] updated pair representation.
         """
         if inplace_safe:
             return self._inference_forward(
@@ -426,6 +427,23 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
                 inplace_chunk_size=_inplace_chunk_size,
                 with_add=_add_with_inplace,
             )
+
+        ##########################################################################
+        # TODO: Algorithm 11/12. Steps:                                          #
+        #   1. LayerNorm the input z.                                            #
+        #   2. Two gated projections: a = mask * sigmoid(g_a(z)) * p_a(z),       #
+        #                              b = mask * sigmoid(g_b(z)) * p_b(z).     #
+        #   3. Combine them via ``_combine_projections`` (outer einsum, the     #
+        #      "outgoing" / "incoming" choice is per-subclass).                 #
+        #   4. Output: linear_z(LN(combined)) * sigmoid(linear_g(z)).            #
+        # TODO: Algorithm 11/12. 步骤:                                           #
+        #   1. 对 z 做 LayerNorm。                                              #
+        #   2. 两路门控投影: a = mask * sigmoid(g_a(z)) * p_a(z)，               #
+        #                    b = mask * sigmoid(g_b(z)) * p_b(z)。              #
+        #   3. 用 ``_combine_projections`` 做外积组合 (outgoing/incoming         #
+        #      由子类决定)。                                                    #
+        #   4. 输出 linear_z(LN(combined)) * sigmoid(linear_g(z))。              #
+        ##########################################################################
 
         if mask is None:
             mask = z.new_ones(z.shape[:-1])
@@ -437,7 +455,6 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         a = mask * self.sigmoid(self.linear_a_g(z)) * self.linear_a_p(z)
         b = mask * self.sigmoid(self.linear_b_g(z)) * self.linear_b_p(z)
 
-        # Prevent matmul overflow in reduced-precision modes.
         if is_fp16_enabled():
             a_std, b_std = a.std(), b.std()
             if a_std != 0.0 and b_std != 0.0:
@@ -453,6 +470,10 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         x = x * self.sigmoid(self.linear_g(z))
         if z_in is not None:
             x = x + z_in
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return x
 
 
@@ -538,33 +559,41 @@ class TriangleAttention(nn.Module):
     ) -> torch.Tensor:
         """
         Args:
-            x:
-                [*, I, J, C_in] input tensor (e.g. the pair representation)
+            x:    [*, I, J, C_in] pair tensor.
+            mask: [*, I, J]        optional mask.
+
         Returns:
-            [*, I, J, C_in] output tensor
+            [*, I, J, C_in] updated pair tensor.
         """
+        ##########################################################################
+        # TODO: Algorithm 13/14. Triangle attention with pair bias.              #
+        #   1. Transpose I↔J if ending-node attention (self.starting is False). #
+        #   2. LayerNorm x.                                                      #
+        #   3. Build two attention biases:                                        #
+        #         mask_bias       = inf*(mask-1)                                 #
+        #         triangle_bias   = self.linear(x) reshaped to [*, H, I, J]      #
+        #   4. Run multi-head attention with biases.                             #
+        #   5. Transpose back if needed.                                         #
+        # TODO: Algorithm 13/14. 带 pair bias 的三角形注意力。                  #
+        #   1. 若 ending-node (starting=False) 先把 I↔J 转置。                  #
+        #   2. 对 x 做 LayerNorm。                                              #
+        #   3. 构造两个 attention bias:                                          #
+        #         mask_bias     = inf*(mask-1)                                   #
+        #         triangle_bias = self.linear(x) 调整成 [*, H, I, J]            #
+        #   4. 多头注意力 + 上述 bias。                                          #
+        #   5. 若之前转置过，再转回来。                                          #
+        ##########################################################################
+
         if mask is None:
-            # [*, I, J]
-            mask = x.new_ones(
-                x.shape[:-1],
-            )
+            mask = x.new_ones(x.shape[:-1])
 
         if not self.starting:
             x = x.transpose(-2, -3)
             mask = mask.transpose(-1, -2)
 
-        # [*, I, J, C_in]
         x = self.layer_norm(x)
-
-        # [*, I, 1, 1, J]
         mask_bias = (self.inf * (mask - 1))[..., :, None, None, :]
-
-        # [*, H, I, J]
-        triangle_bias = permute_final_dims(self.linear(x), (2, 0, 1))
-
-        # [*, 1, H, I, J]
-        triangle_bias = triangle_bias.unsqueeze(-4)
-
+        triangle_bias = permute_final_dims(self.linear(x), (2, 0, 1)).unsqueeze(-4)
         biases = [mask_bias, triangle_bias]
 
         if chunk_size is not None:
@@ -575,6 +604,9 @@ class TriangleAttention(nn.Module):
         if not self.starting:
             x = x.transpose(-2, -3)
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return x
 
 

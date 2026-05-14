@@ -149,6 +149,21 @@ class DiffusionConditioning(nn.Module):
                 - s (torch.Tensor): [..., N_sample, N_tokens, c_s]
                 - z (torch.Tensor): [..., N_tokens, N_tokens, c_z]
         """
+        ##########################################################################
+        # TODO: Algorithm 21. Build (s, z) for the current diffusion step.       #
+        #   1. If ``pair_z`` cache is missing, compute it from relp + z_trunk via#
+        #      ``prepare_cache``.                                                #
+        #   2. Concatenate s_trunk + s_inputs along channel, project to c_s.    #
+        #   3. Add a Fourier embedding of the noise level (log(t/sigma)/4),     #
+        #      LayerNorm + Linear.                                              #
+        #   4. Apply two Transition blocks (residual SwiGLU FFN) to single_s.   #
+        # TODO: Algorithm 21. 为当前扩散步构造 (s, z)。                          #
+        #   1. ``pair_z`` 缓存为空时，用 ``prepare_cache`` 从 relp + z_trunk 算。#
+        #   2. 沿通道拼 s_trunk + s_inputs，再线性投影到 c_s。                   #
+        #   3. 噪声水平做 Fourier embedding (log(t/sigma)/4)，LN+Linear 后加到 s。#
+        #   4. 跑两次 Transition (残差 SwiGLU FFN)。                             #
+        ##########################################################################
+
         if pair_z is None:
             if not use_conditioning:
                 if inplace_safe:
@@ -184,6 +199,10 @@ class DiffusionConditioning(nn.Module):
         else:
             single_s = single_s + self.transition_s1(single_s)
             single_s = single_s + self.transition_s2(single_s)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return single_s, pair_z
 
 
@@ -500,10 +519,20 @@ class DiffusionModule(nn.Module):
             torch.Tensor: the denoised coordinates of x
                 [..., N_sample, N_atom,3]
         """
-        # Scale positions to dimensionless vectors with approximately unit variance
-        # As in EDM:
-        #     r_noisy = (c_in * x_noisy)
-        #     where c_in = 1 / sqrt(sigma_data^2 + sigma^2)
+        ##########################################################################
+        # TODO: EDM single-step denoise wrapper (Algorithm 20).                  #
+        #   1. Scale ``x_noisy`` by c_in = 1/sqrt(sigma_data^2 + sigma^2).        #
+        #   2. Call ``self.f_forward`` to get the raw network update r_update.   #
+        #   3. Combine: x_denoised = c_skip*x + c_out*r_update where             #
+        #        s_ratio = sigma / sigma_data                                   #
+        #        c_skip = 1 / (1 + s_ratio^2)                                   #
+        #        c_out  = sigma / sqrt(1 + s_ratio^2)                            #
+        # TODO: EDM 单步去噪封装 (Algorithm 20)。                                #
+        #   1. 用 c_in = 1/sqrt(sigma_data^2 + sigma^2) 缩放 x_noisy。           #
+        #   2. 调 ``self.f_forward`` 得到原始网络输出 r_update。                 #
+        #   3. 按 EDM 公式合成 x_denoised = c_skip*x + c_out*r_update。          #
+        ##########################################################################
+
         r_noisy = (
             x_noisy
             / torch.sqrt(self.sigma_data**2 + t_hat_noise_level**2)[..., None, None]
@@ -547,4 +576,7 @@ class DiffusionModule(nn.Module):
             * r_update
         ).to(r_update.dtype)
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return x_denoised

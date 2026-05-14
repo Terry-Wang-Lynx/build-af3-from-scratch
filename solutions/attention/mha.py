@@ -155,31 +155,40 @@ class Attention(nn.Module):
         self.gating = gating
         self.local_attention_method = local_attention_method
         self.use_efficient_implementation = use_efficient_implementation
+        self.zero_init = zero_init
 
-        # DISCREPANCY: c_hidden is not the per-head channel dimension, as
-        # stated in the supplement, but the overall channel dimension.
+        ##########################################################################
+        # TODO: Initialize the query/key/value/output linear layers.             #
+        #   Query uses bias iff ``q_linear_bias`` is True (default for AF3).     #
+        #   Key/value/output use no bias. Output dim = c_hidden * num_heads.     #
+        #   If ``gating``, initialize ``linear_g`` (zero-init) and a sigmoid.    #
+        #   Names must be linear_q / linear_k / linear_v / linear_o / linear_g.  #
+        #                                                                        #
+        # TODO: 初始化 query / key / value / output 线性层。                     #
+        #   query 是否带 bias 由 ``q_linear_bias`` 决定 (AF3 默认带)。            #
+        #   key / value / output 均不带 bias，输出维度 = c_hidden * num_heads。  #
+        #   若 ``gating``，初始化 ``linear_g`` (zero-init) 和 sigmoid。           #
+        #   命名必须是 linear_q / linear_k / linear_v / linear_o / linear_g。    #
+        ##########################################################################
+
+        out_h = self.c_hidden * self.num_heads
         if q_linear_bias:
-            # Attention in AF3
-            self.linear_q = Linear(
-                in_features=self.c_q, out_features=self.c_hidden * self.num_heads
-            )
+            self.linear_q = Linear(in_features=self.c_q, out_features=out_h)
         else:
-            # Vanilla attention
-            self.linear_q = LinearNoBias(self.c_q, self.c_hidden * self.num_heads)
-        self.linear_k = LinearNoBias(self.c_k, self.c_hidden * self.num_heads)
-        self.linear_v = LinearNoBias(self.c_v, self.c_hidden * self.num_heads)
-        self.linear_o = LinearNoBias(self.c_hidden * self.num_heads, self.c_q)
+            self.linear_q = LinearNoBias(self.c_q, out_h)
+        self.linear_k = LinearNoBias(self.c_k, out_h)
+        self.linear_v = LinearNoBias(self.c_v, out_h)
+        self.linear_o = LinearNoBias(out_h, self.c_q)
         self.linear_g = None
         if self.gating:
-            self.linear_g = LinearNoBias(
-                self.c_q, self.c_hidden * self.num_heads, initializer="zeros"
-            )
+            self.linear_g = LinearNoBias(self.c_q, out_h, initializer="zeros")
             self.sigmoid = nn.Sigmoid()
-
-        self.zero_init = zero_init
         if self.zero_init:
-            # zero init the output layer
             nn.init.zeros_(self.linear_o.weight)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def _prep_qkv(
         self, q_x: torch.Tensor, kv_x: torch.Tensor, apply_scale: bool = True
@@ -275,72 +284,67 @@ class Attention(nn.Module):
             torch.Tensor: attention update
                 [*, Q, C_q]
         """
+        ##########################################################################
+        # TODO: Multi-head attention forward pass.                               #
+        #   - Project Q/K/V via ``self._prep_qkv`` (scales Q by 1/sqrt(c_hidden))#
+        #   - Add a head dimension to ``attn_bias`` / ``trunked_attn_bias``      #
+        #   - Local-attention branch (n_queries/n_keys set):                     #
+        #       * "global_attention_with_bias": build a local mask via          #
+        #          ``create_local_attn_bias`` and call ``_attention``           #
+        #       * "local_cross_attention": call ``_local_attention``             #
+        #   - Otherwise: call ``_attention``                                     #
+        #   - Transpose to [*, Q, H, C_hidden] and project out with ``_wrap_up`` #
+        #                                                                        #
+        # TODO: 多头注意力前向。                                                 #
+        #   - 通过 ``self._prep_qkv`` 投影 Q/K/V (Q 已按 1/sqrt(c_hidden) 缩放)。#
+        #   - 给 ``attn_bias`` / ``trunked_attn_bias`` 加 head 维度。             #
+        #   - 若给了 n_queries / n_keys 则走局部分支:                            #
+        #       * "global_attention_with_bias": 用 ``create_local_attn_bias``    #
+        #          构造局部 mask，再调 ``_attention``。                         #
+        #       * "local_cross_attention": 调 ``_local_attention``。            #
+        #   - 否则: 直接 ``_attention``。                                        #
+        #   - 转置到 [*, Q, H, C_hidden] 后通过 ``_wrap_up`` 出输出。            #
+        ##########################################################################
 
         q, k, v = self._prep_qkv(q_x=q_x, kv_x=kv_x, apply_scale=True)
 
-        if attn_bias is not None:
-            if len(attn_bias.shape) != len(q.shape):
-                # Expand at head dim, got shape [..., 1, Q, K]
-                attn_bias = attn_bias.unsqueeze(dim=-3)
-
-        if trunked_attn_bias is not None:
-            # NOTE: trunked_attn_bias can only be used with "local_cross_attention" method
-            if len(trunked_attn_bias.shape) != len(q.shape) + 1:
-                # Expand at head dim, got shape [..., 1, n_trunks, n_queries, n_keys]
-                trunked_attn_bias = trunked_attn_bias.unsqueeze(dim=-4)
+        if attn_bias is not None and len(attn_bias.shape) != len(q.shape):
+            attn_bias = attn_bias.unsqueeze(dim=-3)
+        if trunked_attn_bias is not None and len(trunked_attn_bias.shape) != len(q.shape) + 1:
+            trunked_attn_bias = trunked_attn_bias.unsqueeze(dim=-4)
 
         if n_queries and n_keys:
             if self.local_attention_method == "global_attention_with_bias":
                 local_attn_bias = create_local_attn_bias(
                     q.shape[-2], n_queries, n_keys, inf=inf, device=q.device
                 )
-                # Expand to same shape as attn_bias
                 local_attn_bias = local_attn_bias.reshape(
-                    (1,) * (len(q.shape[:-2])) + local_attn_bias.shape
+                    (1,) * len(q.shape[:-2]) + local_attn_bias.shape
                 )
                 if attn_bias is not None:
-                    if inplace_safe:
-                        local_attn_bias += attn_bias
-                    else:
-                        local_attn_bias = local_attn_bias + attn_bias
-                o = _attention(
-                    q=q,
-                    k=k,
-                    v=v,
-                    attn_bias=local_attn_bias,
-                    use_efficient_implementation=self.use_efficient_implementation,
-                    inplace_safe=inplace_safe,
-                )
-
+                    local_attn_bias = local_attn_bias + attn_bias
+                o = _attention(q, k, v, attn_bias=local_attn_bias,
+                               use_efficient_implementation=self.use_efficient_implementation,
+                               inplace_safe=inplace_safe)
             elif self.local_attention_method == "local_cross_attention":
                 o = _local_attention(
-                    q=q,
-                    k=k,
-                    v=v,
-                    n_queries=n_queries,
-                    n_keys=n_keys,
-                    attn_bias=attn_bias,
-                    trunked_attn_bias=trunked_attn_bias,
-                    inf=inf,
-                    use_efficient_implementation=self.use_efficient_implementation,
-                    inplace_safe=inplace_safe,
-                    chunk_size=chunk_size,
+                    q=q, k=k, v=v, n_queries=n_queries, n_keys=n_keys,
+                    attn_bias=attn_bias, trunked_attn_bias=trunked_attn_bias,
+                    inf=inf, use_efficient_implementation=self.use_efficient_implementation,
+                    inplace_safe=inplace_safe, chunk_size=chunk_size,
                 )
             else:
-                raise ValueError(
-                    f"Invalid local attention method: {self.local_attention_method}"
-                )
+                raise ValueError(f"Invalid local_attention_method: {self.local_attention_method}")
         else:
-            o = _attention(
-                q=q,
-                k=k,
-                v=v,
-                attn_bias=attn_bias,
-                use_efficient_implementation=self.use_efficient_implementation,
-                inplace_safe=inplace_safe,
-            )  # [*, H, Q, C_hidden]
-        o = o.transpose(-2, -3)  # o: [*, Q, H, C_hidden]
-        o = self._wrap_up(o, q_x)  # q_x: [*, Q, c_q]
+            o = _attention(q, k, v, attn_bias=attn_bias,
+                           use_efficient_implementation=self.use_efficient_implementation,
+                           inplace_safe=inplace_safe)
+        o = o.transpose(-2, -3)
+        o = self._wrap_up(o, q_x)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
         return o
 

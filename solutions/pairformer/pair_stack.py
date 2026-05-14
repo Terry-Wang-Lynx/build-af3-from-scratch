@@ -130,10 +130,22 @@ class PairformerBlock(nn.Module):
             (s_updated, z_updated) — same shapes as inputs. ``s_updated`` is
             ``None`` if this block has no single-track (``c_s == 0``).
         """
-        z = self.tri_mul_out(z, mask=pair_mask,
-                             inplace_safe=True, _add_with_inplace=True)
-        z = self.tri_mul_in(z, mask=pair_mask,
-                            inplace_safe=True, _add_with_inplace=True)
+        ##########################################################################
+        # TODO: Algorithm 17 lines 2-8. Update z with four sub-blocks, then     #
+        #   (iff c_s > 0) update s with one AttentionPairBias + Transition.      #
+        #     1. z += TriangleMultiplicationOutgoing(z)                          #
+        #     2. z += TriangleMultiplicationIncoming(z)                          #
+        #     3. z += TriangleAttentionStartingNode(z)                           #
+        #     4. z += TriangleAttentionEndingNode(z) (transposed twice)          #
+        #     5. z += pair_transition(z)                                         #
+        #     6. (c_s>0) s += AttentionPairBias(s, z)                            #
+        #     7. (c_s>0) s += single_transition(s)                               #
+        # TODO: Algorithm 17 第 2-8 行。先用四步更新 z，再 (c_s>0 时) 用一次     #
+        #   AttentionPairBias + Transition 更新 s。                              #
+        ##########################################################################
+
+        z = self.tri_mul_out(z, mask=pair_mask, inplace_safe=True, _add_with_inplace=True)
+        z = self.tri_mul_in(z, mask=pair_mask, inplace_safe=True, _add_with_inplace=True)
         z += self.tri_att_start(z, mask=pair_mask, inplace_safe=True)
         z = z.transpose(-2, -3).contiguous()
         z += self.tri_att_end(
@@ -147,6 +159,10 @@ class PairformerBlock(nn.Module):
         if self.c_s > 0:
             s = s + self.attention_pair_bias(a=s, s=None, z=z)
             s = s + self.single_transition(s)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return s, z
 
 

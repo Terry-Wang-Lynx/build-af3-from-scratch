@@ -140,36 +140,33 @@ class ConfidenceHead(nn.Module):
         x_pred_coords: torch.Tensor,
         use_embedding: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
+        """Algorithm 31 — ConfidenceHead.
+
         Args:
-            input_feature_dict: Dictionary containing input features.
-            s_inputs (torch.Tensor): single embedding from InputFeatureEmbedder
-                [..., N_tokens, c_s_inputs]
-            s_trunk (torch.Tensor): single feature embedding from PairFormer (Alg17)
-                [..., N_tokens, c_s]
-            z_trunk (torch.Tensor): pair feature embedding from PairFormer (Alg17)
-                [..., N_tokens, N_tokens, c_z]
-            pair_mask (torch.Tensor): pair mask
-                [..., N_token, N_token]
-            x_pred_coords (torch.Tensor): predicted coordinates
-                [..., N_sample, N_atoms, 3]
-            triangle_multiplicative: Triangle multiplicative implementation type.
-                - "torch" (default): PyTorch native implementation
-                - "cuequivariance": Cuequivariance implementation
-            triangle_attention: Triangle attention implementation type.
-                - "torch" (default): PyTorch native implementation
-                - "triattention": Optimized tri-attention module
-                - "deepspeed": DeepSpeed's fused attention kernel
-            inplace_safe (bool, optional): Whether to use inplace operations. Defaults to False.
-            chunk_size (Optional[int], optional): Chunk size for memory-efficient operations. Defaults to None.
+            input_feature_dict: input feature dict.
+            s_inputs:  [..., N_tokens, c_s_inputs] single embedding from InputFeatureEmbedder.
+            s_trunk:   [..., N_tokens, c_s]         single feature from PairformerStack.
+            z_trunk:   [..., N_tokens, N_tokens, c_z] pair feature from PairformerStack.
+            pair_mask: [..., N_token, N_token]      optional pair mask.
+            x_pred_coords: [..., N_sample, N_atoms, 3] predicted coordinates.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-                - plddt_preds: Predicted pLDDT scores [..., N_sample, N_atom, plddt_bins].
-                - pae_preds: Predicted PAE scores [..., N_sample, N_token, N_token, pae_bins].
-                - pde_preds: Predicted PDE scores [..., N_sample, N_token, N_token, pde_bins].
-                - resolved_preds: Predicted resolved scores [..., N_sample, N_atom, 2].
+            (plddt_preds, pae_preds, pde_preds, resolved_preds).
         """
+        ##########################################################################
+        # TODO: Algorithm 31. Confidence head.                                   #
+        #   1. Optionally detach the trunk outputs.                              #
+        #   2. Clamp and LayerNorm s_trunk.                                      #
+        #   3. Build initial pair conditioning z = LN(z_trunk) + projections    #
+        #      from s_inputs.                                                    #
+        #   4. For each diffusion sample, call ``memory_efficient_forward`` to   #
+        #      get (plddt, pae, pde, resolved) and stack along the sample dim.   #
+        # TODO: Algorithm 31。置信度头。                                          #
+        #   1. 可选地 detach 主干输出。                                          #
+        #   2. clamp 后 LayerNorm s_trunk。                                      #
+        #   3. 用 s_inputs 投影 + z_trunk 拼成初始 pair 条件 z。                  #
+        #   4. 对每个扩散样本调用 ``memory_efficient_forward``，沿样本维堆叠。   #
+        ##########################################################################
 
         if self.stop_gradient:
             s_inputs = s_inputs.detach()
@@ -240,6 +237,10 @@ class ConfidenceHead(nn.Module):
         resolved_preds = torch.stack(
             resolved_preds, dim=-3
         )  # [..., N_sample, N_atom, 2]
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return (
             plddt_preds,
             pae_preds,

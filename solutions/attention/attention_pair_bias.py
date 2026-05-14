@@ -157,10 +157,27 @@ class AttentionPairBias(nn.Module):
     ) -> torch.Tensor:
         """AttentionPairBias forward (adaLN-Zero output gate from Peebles & Xie '23).
 
-        Routes to `local_multihead_attention` if (n_queries, n_keys) are given,
-        else `standard_multihead_attention`.
+        Routes to ``local_multihead_attention`` if ``(n_queries, n_keys)`` is
+        given, otherwise ``standard_multihead_attention``.
         """
-        # Input projections
+        ##########################################################################
+        # TODO: Algorithm 24. Steps:                                              #
+        #   1. Normalize the query input ``a`` (adaptive if has_s, plain LN o.w.).#
+        #   2. If ``cross_attention_mode``, build ``kv`` from a second LN; else  #
+        #      reuse ``a`` for both query and kv.                                #
+        #   3. Dispatch to local vs standard multi-head attention based on       #
+        #      whether ``n_queries``/``n_keys`` are passed.                      #
+        #   4. If has_s, apply the adaLN-Zero output gate                        #
+        #      ``sigmoid(linear_a_last(s)) * a``.                                #
+        # TODO: Algorithm 24. 步骤:                                              #
+        #   1. 归一化 query 输入 ``a`` (has_s 时用 adaptive，否则普通 LN)。       #
+        #   2. 若 ``cross_attention_mode``，再过一次 LN 得到 ``kv``；否则        #
+        #      query 与 kv 共用 ``a``。                                          #
+        #   3. 根据是否给了 ``n_queries`` / ``n_keys`` 分派到 local / standard 。 #
+        #   4. has_s 时再叠一次 adaLN-Zero 输出门                                 #
+        #      ``sigmoid(linear_a_last(s)) * a``。                               #
+        ##########################################################################
+
         if self.has_s:
             a = self.layernorm_a(a=a, s=s)
         else:
@@ -176,8 +193,11 @@ class AttentionPairBias(nn.Module):
         else:
             a = self.standard_multihead_attention(a, kv, z)
 
-        # adaLN-Zero output gate
         if self.has_s:
             a = a * torch.sigmoid(self.linear_a_last(s))
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return a
 

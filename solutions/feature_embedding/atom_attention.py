@@ -305,7 +305,7 @@ class AtomAttentionEncoder(nn.Module):
         p_lm: Optional[torch.Tensor] = None,
         c_l: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Algorithm 5 (AtomAttentionEncoder).
+        """Algorithm 5 — AtomAttentionEncoder.
 
         Returns (a, q_l, c_l, p_lm):
             a:    [..., (N_sample), N_token, c_token]
@@ -313,6 +313,26 @@ class AtomAttentionEncoder(nn.Module):
             c_l:  [..., (N_sample), N_atom, c_atom]
             p_lm: [..., (N_sample), n_blocks, n_queries, n_keys, c_atompair]
         """
+        ##########################################################################
+        # TODO: Algorithm 5. AtomAttentionEncoder.                               #
+        #   1. Build time-invariant (c_l, p_lm) via ``prepare_cache`` if not     #
+        #      already given.                                                    #
+        #   2. If coords ``r_l`` are provided, add the trunk single broadcast     #
+        #      and the noisy-position projection to get the query ``q_l``.       #
+        #      Otherwise q_l = c_l.clone().                                      #
+        #   3. Fuse the single conditioning into the pair representation         #
+        #      ``p_lm`` via two ReLU-linear projections + a small MLP.           #
+        #   4. Run AtomTransformer (local cross-attention) on (q_l, c_l, p_lm). #
+        #   5. Aggregate atoms→tokens via mean-pool to produce ``a``.            #
+        # TODO: Algorithm 5. AtomAttentionEncoder。                              #
+        #   1. 通过 ``prepare_cache`` 算与时间无关的 (c_l, p_lm)。               #
+        #   2. 若给了坐标 r_l，把主干 single 广播 + 噪声坐标投影加到 c_l，       #
+        #      得到查询 q_l；否则 q_l = c_l.clone()。                            #
+        #   3. 用两路 ReLU+Linear + 小 MLP 把 single 条件融入 p_lm。            #
+        #   4. AtomTransformer 跑局部 cross-attention。                          #
+        #   5. mean-pool 原子→token 得到 a。                                     #
+        ##########################################################################
+
         if self.has_coords:
             assert r_l is not None and s is not None and z is not None
 
@@ -325,7 +345,6 @@ class AtomAttentionEncoder(nn.Module):
                 r_l=r_l, z=z,
             )
 
-        # Broadcast trunk single + noisy positions when r_l is provided.
         n_token = None
         if r_l is not None:
             assert s is not None
@@ -338,7 +357,6 @@ class AtomAttentionEncoder(nn.Module):
         else:
             q_l = c_l.clone()
 
-        # Fuse single conditioning into the pair representation.
         c_l_q, c_l_k, _ = rearrange_qk_to_dense_trunk(
             q=c_l, k=c_l, dim_q=-2, dim_k=-2,
             n_queries=self.n_queries, n_keys=self.n_keys,
@@ -351,16 +369,18 @@ class AtomAttentionEncoder(nn.Module):
         )
         p_lm = p_lm + self.small_mlp(p_lm)
 
-        # Local cross-attention over atoms.
         q_l = self.atom_transformer(q_l, c_l, p_lm)
 
-        # Aggregate per-atom representation to per-token representation
         a = aggregate_atom_to_token(
             x_atom=F.relu(self.linear_no_bias_q(q_l)),
             atom_to_token_idx=atom_to_token_idx,
             n_token=n_token,
             reduce="mean",
-        )  # [..., (N_sample), N_token, c_token]
+        )
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return a, q_l, c_l, p_lm
 
 
@@ -422,17 +442,34 @@ class AtomAttentionDecoder(nn.Module):
         c_skip: torch.Tensor,
         p_skip: torch.Tensor,
     ) -> torch.Tensor:
-        """Algorithm 6 (AtomAttentionDecoder).
+        """Algorithm 6 — AtomAttentionDecoder.
 
         Maps token-level activations + atom-level skip connections to a
         per-atom position update.
 
         Returns:
-            r: [..., N_atom, 3]
+            r: [..., N_atom, 3] coordinate update.
         """
+        ##########################################################################
+        # TODO: Algorithm 6.                                                     #
+        #   1. Broadcast linear_no_bias_a(a) from token to atom level and add    #
+        #      the atom-level skip ``q_skip``.                                   #
+        #   2. Run AtomTransformer with conditioning ``c_skip`` and pair         #
+        #      ``p_skip``.                                                       #
+        #   3. Project to a 3-vector update via LayerNorm + linear_no_bias_out.  #
+        # TODO: Algorithm 6.                                                     #
+        #   1. 把 linear_no_bias_a(a) 从 token 广播到原子级，再加 q_skip。       #
+        #   2. AtomTransformer 用 c_skip + p_skip 作条件跑一次。                 #
+        #   3. LayerNorm + linear_no_bias_out 投到 3 维坐标更新。                #
+        ##########################################################################
+
         q = broadcast_token_to_atom(
             x_token=self.linear_no_bias_a(a),
             atom_to_token_idx=atom_to_token_idx,
         ) + q_skip
         q = self.atom_transformer(q, c_skip, p_skip)
         return self.linear_no_bias_out(self.layernorm_q(q))
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################

@@ -53,18 +53,26 @@ class AdaptiveLayerNorm(nn.Module):
     def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            a (torch.Tensor): the single feature aggregate per-atom representation
-                [..., N_token, c_a]
-            s (torch.Tensor): single embedding
-                [..., N_token, c_s]
+            a: [..., N_token, c_a] aggregated per-atom representation.
+            s: [..., N_token, c_s] single embedding.
 
         Returns:
-            torch.Tensor: the updated a from AdaLN
-                [..., N_token, c_a]
+            [..., N_token, c_a] — AdaLN-modulated ``a``.
         """
+        ##########################################################################
+        # TODO: Apply LayerNorm to ``a`` and ``s``, then modulate ``a`` with     #
+        #   ``sigmoid(linear_s(s)) * a + linear_nobias_s(s)``.                   #
+        # TODO: 对 ``a`` 和 ``s`` 分别 LayerNorm，然后用                        #
+        #   ``sigmoid(linear_s(s)) * a + linear_nobias_s(s)`` 调制 ``a``。      #
+        ##########################################################################
+
         a = self.layernorm_a(a)
         s = self.layernorm_s(s)
         a = torch.sigmoid(self.linear_s(s)) * a + self.linear_nobias_s(s)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return a
 
 
@@ -95,41 +103,23 @@ class Transition(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x (torch.Tensor): the input tensor
-                [..., c]
+            x: [..., c_in] input.
 
         Returns:
-            torch.Tensor: the output tensor as the same shape of x
-                [..., c]
+            [..., c_in] — SwiGLU-style gated FFN output.
         """
-        if self.training:
-            x = self.layernorm1(x)
-            a = self.linear_no_bias_a(x)
-            b = self.linear_no_bias_b(x)
-            x = self.linear_no_bias(F.silu(a) * b)
-            return x
-        else:
-            other_dims = x.shape[:-1]
-            dim_size = x.shape[-1]
-            size = x.shape[-2]
-            x = x.reshape(-1, dim_size)
-            chunk_num = 1 if size < 3200 else 8
-            chunks = torch.chunk(x, chunk_num, dim=-2)
-            outputs = torch.empty(
-                (x.shape[0], self.c_in), dtype=x.dtype, device=x.device
-            )
-            start = 0
-            for chunk in chunks:
-                y = self.layernorm1(chunk)
-                a = self.linear_no_bias_a(y)
-                a = F.silu(a, True)
-                b = self.linear_no_bias_b(y)
-                del y
-                b *= a
-                del a
-                b = self.linear_no_bias(b)
-                outputs[start : start + b.shape[0]] = b
-                start += b.shape[0]
-                del b
-            outputs = outputs.reshape(*other_dims, self.c_in)
-            return outputs
+        ##########################################################################
+        # TODO: Algorithm 11. Apply LayerNorm, project via two Linear branches    #
+        #   (a, b), gate as ``silu(a) * b``, then project back via linear_no_bias.#
+        # TODO: Algorithm 11。先 LayerNorm，分别经 linear_no_bias_a / b 投影得到 #
+        #   a 和 b，按 ``silu(a) * b`` 门控，最后用 linear_no_bias 投回原维度。 #
+        ##########################################################################
+
+        x = self.layernorm1(x)
+        a = self.linear_no_bias_a(x)
+        b = self.linear_no_bias_b(x)
+        return self.linear_no_bias(F.silu(a) * b)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################

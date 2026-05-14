@@ -77,9 +77,23 @@ class InputFeatureEmbedder(nn.Module):
         """Algorithm 2 — assemble the per-token single embedding.
 
         Returns:
-            s_inputs: [..., N_token, 384 (c_token) + 32 + 32 + 1 = 449]
+            s_inputs: [..., N_token, c_token + 32 + 32 + 1 = 449].
         """
         del inplace_safe
+        ##########################################################################
+        # TODO: Algorithm 2. Build the per-token single representation.          #
+        #   1. Run AtomAttentionEncoder on the per-atom features (without coords)#
+        #      to get a [..., N_token, c_token] token-level activation ``a``.    #
+        #   2. Concatenate ``a`` with per-token features (restype / profile /    #
+        #      deletion_mean) along the channel dim.                             #
+        #   3. If ESM features are enabled, add the projected ESM embedding.    #
+        # TODO: Algorithm 2。生成每 token 的 single 表示。                       #
+        #   1. 跑 AtomAttentionEncoder (不带坐标) 得到 token 级激活 a。          #
+        #   2. 把 a 和每 token 特征 (restype / profile / deletion_mean) 沿通道  #
+        #      维拼起来。                                                        #
+        #   3. 若启用了 ESM，加上投影后的 ESM embedding。                       #
+        ##########################################################################
+
         a, _, _, _ = self.atom_attention_encoder(
             input_feature_dict["atom_to_token_idx"],
             input_feature_dict["ref_pos"],
@@ -105,5 +119,8 @@ class InputFeatureEmbedder(nn.Module):
             esm_emb = self.linear_esm(input_feature_dict["esm_token_embedding"])
             s_inputs = s_inputs + esm_emb
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return s_inputs
 

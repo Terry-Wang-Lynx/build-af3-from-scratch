@@ -87,40 +87,44 @@ class MSAPairWeightedAveraging(nn.Module):
     def forward(self, m: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            m (torch.Tensor): msa embedding
-                [...,n_msa_sampled, n_token, c_m]
-            z (torch.Tensor): pair embedding
-                [...,n_token, n_token, c_z]
+            m: [..., N_msa, N_token, c_m] MSA embedding.
+            z: [..., N_token, N_token, c_z] pair embedding.
+
         Returns:
-            torch.Tensor: updated msa embedding
-                [...,n_msa_sampled, n_token, c_m]
+            [..., N_msa, N_token, c_m] updated MSA embedding.
         """
-        # Input projections
-        m = self.layernorm_m(m)  # [...,n_msa_sampled, n_token, c_m]
-        v = self.linear_no_bias_mv(m)  # [...,n_msa_sampled, n_token, n_heads * c]
-        v = v.reshape(
-            *v.shape[:-1], self.n_heads, self.c
-        )  # [...,n_msa_sampled, n_token, n_heads, c]
-        b = self.linear_no_bias_z(
-            self.layernorm_z(z)
-        )  # [...,n_token, n_token, n_heads]
-        g = torch.sigmoid(
-            self.linear_no_bias_mg(m)
-        )  # [...,n_msa_sampled, n_token, n_heads * c]
-        g = g.reshape(
-            *g.shape[:-1], self.n_heads, self.c
-        )  # [...,n_msa_sampled, n_token, n_heads, c]
-        w = self.softmax_w(b)  # [...,n_token, n_token, n_heads]
-        wv = torch.einsum(
-            "...ijh,...mjhc->...mihc", w, v
-        )  # [...,n_msa_sampled,n_token,n_heads,c]
-        o = g * wv
-        o = o.reshape(
-            *o.shape[:-2], self.n_heads * self.c
-        )  # [...,n_msa_sampled, n_token, n_heads * c]
-        m = self.linear_no_bias_out(o)  # [...,n_msa_sampled, n_token, c_m]
-        if (not self.training) and m.shape[-3] > 5120:
-            del v, b, g, w, wv, o
+        ##########################################################################
+        # TODO: Algorithm 10. MSAPairWeightedAveraging.                          #
+        #   1. LayerNorm m -> project to value v via linear_no_bias_mv, reshape  #
+        #      to [..., N_msa, N_token, H, c].                                   #
+        #   2. From z: LayerNorm + linear_no_bias_z -> per-head bias             #
+        #      b: [..., N_token, N_token, H].                                    #
+        #   3. From m: sigmoid(linear_no_bias_mg) -> gate g, reshape per-head.  #
+        #   4. Compute attention weights w = softmax(b, dim=-2).                #
+        #   5. Aggregate: wv = einsum('...ijh,...mjhc->...mihc', w, v).         #
+        #   6. Combine with gate: o = g * wv, flatten heads, project via         #
+        #      linear_no_bias_out.                                               #
+        # TODO: Algorithm 10。MSAPairWeightedAveraging。                         #
+        #   1. LayerNorm m，linear_no_bias_mv 投影到 value，reshape 出头维。     #
+        #   2. 从 z 经 LayerNorm + linear_no_bias_z 得每头偏置 b。               #
+        #   3. 从 m 经 sigmoid(linear_no_bias_mg) 得门控 g。                     #
+        #   4. softmax(b, dim=-2) 得注意力权重 w。                               #
+        #   5. einsum('...ijh,...mjhc->...mihc', w, v) 聚合得 wv。               #
+        #   6. o = g * wv，扁平化头维后用 linear_no_bias_out 投回 c_m。          #
+        ##########################################################################
+
+        m = self.layernorm_m(m)
+        v = self.linear_no_bias_mv(m).reshape(*m.shape[:-1], self.n_heads, self.c)
+        b = self.linear_no_bias_z(self.layernorm_z(z))
+        g = torch.sigmoid(self.linear_no_bias_mg(m)).reshape(*m.shape[:-1], self.n_heads, self.c)
+        w = self.softmax_w(b)
+        wv = torch.einsum("...ijh,...mjhc->...mihc", w, v)
+        o = (g * wv).reshape(*g.shape[:-2], self.n_heads * self.c)
+        m = self.linear_no_bias_out(o)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return m
 
 
@@ -466,6 +470,20 @@ class MSAModule(nn.Module):
         Returns:
             updated ``z``, same shape.
         """
+        ##########################################################################
+        # TODO: Algorithm 8. MSAModule.                                          #
+        #   1. Early-exit if no MSA features are provided.                       #
+        #   2. Sub-sample the MSA (random without replacement), one-hot encode  #
+        #      the residue identities, concatenate with deletion features.       #
+        #   3. Project: msa_sample = linear_no_bias_m(...) + linear_no_bias_s(s).#
+        #   4. Run all MSABlocks: for each block do block(msa_sample, z).        #
+        # TODO: Algorithm 8。MSAModule。                                         #
+        #   1. 没有 MSA 特征则原样返回 z。                                       #
+        #   2. 随机采样 MSA 子集，对残基 one-hot，再和删除特征拼起来。           #
+        #   3. msa_sample = linear_no_bias_m(...) + linear_no_bias_s(s)。        #
+        #   4. 依次跑所有 MSABlock。                                             #
+        ##########################################################################
+
         if self.n_blocks < 1 or "msa" not in input_feature_dict:
             return z
         if input_feature_dict["msa"].dim() < 2:
@@ -519,5 +537,9 @@ class MSAModule(nn.Module):
         msa_sample = msa_sample + self.linear_no_bias_s(s_inputs)
         for block in self.blocks:
             msa_sample, z = block(msa_sample, z, pair_mask=pair_mask)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return z
 

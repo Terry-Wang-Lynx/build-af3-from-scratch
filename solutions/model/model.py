@@ -170,7 +170,27 @@ class Protenix(nn.Module):
             - s:       [..., N_token, c_s]          single after Pairformer
             - z:       [..., N_token, N_token, c_z] pair after Pairformer
         """
-        # Lines 1-5: input embedding
+        ##########################################################################
+        # TODO: Algorithm 1 lines 1-13.                                          #
+        #   1. ``InputFeatureEmbedder`` → s_inputs.                              #
+        #   2. Optionally fold a ConstraintEmbedder output into z_init.          #
+        #   3. Build z_init = outer-projection(s_init) + RelativePE +            #
+        #      LinearNoBias(token_bonds) [+ z_constraint].                       #
+        #   4. Recycle for ``N_cycle`` rounds:                                   #
+        #        z = z_init + linear_no_bias_z_cycle(layernorm_z_cycle(z))       #
+        #        z += template_embedder(...) if any                              #
+        #        z = msa_module(...)                                             #
+        #        s = s_init + linear_no_bias_s(layernorm_s(s))                   #
+        #        s, z = pairformer_stack(s, z, pair_mask=None)                   #
+        # TODO: Algorithm 1 第 1-13 行。                                         #
+        #   1. ``InputFeatureEmbedder`` 得 s_inputs。                             #
+        #   2. 若有 constraint 特征，叠加 ConstraintEmbedder。                    #
+        #   3. z_init = s 的两路外向投影 + RelativePE + token_bonds 投影 +       #
+        #      可选 z_constraint。                                                #
+        #   4. 循环 ``N_cycle`` 轮 recycling，依次跑                              #
+        #      MSAModule / TemplateEmbedder / PairformerStack。                  #
+        ##########################################################################
+
         s_inputs = self.input_embedder(input_feature_dict, inplace_safe=False)
         z_constraint = None
         if "constraint_feature" in input_feature_dict:
@@ -188,7 +208,6 @@ class Protenix(nn.Module):
         if z_constraint is not None:
             z_init = z_init + z_constraint
 
-        # Lines 6-13: recycling
         z = torch.zeros_like(z_init)
         s = torch.zeros_like(s_init)
         for _ in range(N_cycle):
@@ -199,6 +218,9 @@ class Protenix(nn.Module):
             s = s_init + self.linear_no_bias_s(self.layernorm_s(s))
             s, z = self.pairformer_stack(s, z, pair_mask=None)
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return s_inputs, s, z
 
     def sample_diffusion(self, **kwargs: Any) -> torch.Tensor:

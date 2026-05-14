@@ -116,6 +116,20 @@ class TemplateEmbedder(nn.Module):
         Returns 0 (a scalar that broadcasts) if templates aren't provided or
         if the module was built with ``n_blocks=0``.
         """
+        ##########################################################################
+        # TODO: Algorithm 16. For each template:                                 #
+        #   1. Build per-chain mask + LayerNorm z.                               #
+        #   2. ``single_template_forward`` builds a small PairformerStack input  #
+        #      from the template (distogram + frames + aatype) and runs it.      #
+        #   3. Average across templates, ReLU, and project via linear_no_bias_u  #
+        #      to the pair channel.                                              #
+        # TODO: Algorithm 16。对每个模板:                                       #
+        #   1. 构造 chain-mask、LayerNorm z。                                    #
+        #   2. ``single_template_forward`` 用模板特征 (distogram / frame /     #
+        #      aatype) 喂一遍小型 PairformerStack。                              #
+        #   3. 对模板取平均、ReLU，再 linear_no_bias_u 投回 pair 通道。          #
+        ##########################################################################
+
         if "template_aatype" not in input_feature_dict or self.n_blocks < 1:
             return 0  # type: ignore[return-value]
         asym_id = input_feature_dict["asym_id"]
@@ -141,6 +155,10 @@ class TemplateEmbedder(nn.Module):
         u = u / (1e-7 + num_templates)
         u = self.linear_no_bias_u(self.relu(u))
         assert u.shape == (num_residues, num_residues, query_num_channels)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
         return u
 
     def single_template_forward(
