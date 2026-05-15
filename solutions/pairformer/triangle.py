@@ -429,20 +429,81 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
             )
 
         ##########################################################################
-        # TODO: Algorithm 11/12. Steps:                                          #
-        #   1. LayerNorm the input z.                                            #
-        #   2. Two gated projections: a = mask * sigmoid(g_a(z)) * p_a(z),       #
-        #                              b = mask * sigmoid(g_b(z)) * p_b(z).     #
-        #   3. Combine them via ``_combine_projections`` (outer einsum, the     #
-        #      "outgoing" / "incoming" choice is per-subclass).                 #
-        #   4. Output: linear_z(LN(combined)) * sigmoid(linear_g(z)).            #
-        # TODO: Algorithm 11/12. 步骤:                                           #
-        #   1. 对 z 做 LayerNorm。                                              #
-        #   2. 两路门控投影: a = mask * sigmoid(g_a(z)) * p_a(z)，               #
-        #                    b = mask * sigmoid(g_b(z)) * p_b(z)。              #
-        #   3. 用 ``_combine_projections`` 做外积组合 (outgoing/incoming         #
-        #      由子类决定)。                                                    #
-        #   4. 输出 linear_z(LN(combined)) * sigmoid(linear_g(z))。              #
+        # TODO: Algorithm 11 (outgoing) / Algorithm 12 (incoming).               #
+        #   Subclasses fix ``self._outgoing`` via partialmethod, so the only     #
+        #   choice that depends on it lives in ``_combine_projections``.        #
+        #                                                                        #
+        #   Step 1 — Default mask to ones, then add a trailing channel axis      #
+        #     so it broadcasts against the [*, N, N, c_hidden] projections:      #
+        #       if mask is None:                                                 #
+        #           mask = z.new_ones(z.shape[:-1])                              #
+        #       mask = mask.unsqueeze(-1)               # [*, N, N, 1]           #
+        #                                                                        #
+        #   Step 2 — Save ``z`` for the optional fused residual add (the         #
+        #     ``_add_with_inplace`` path returns ``z_in + update`` directly):    #
+        #       z_in = z.clone() if _add_with_inplace else None                  #
+        #                                                                        #
+        #   Step 3 — Pre-LayerNorm:                                              #
+        #       z = self.layer_norm_in(z)                # [*, N, N, c_z]        #
+        #                                                                        #
+        #   Step 4 — Two gated projections to the hidden channel ``c_hidden``:   #
+        #       a = mask * self.sigmoid(self.linear_a_g(z)) * self.linear_a_p(z) #
+        #       b = mask * self.sigmoid(self.linear_b_g(z)) * self.linear_b_p(z) #
+        #     Both end up [*, N, N, c_hidden]. ``linear_*_g`` are gate           #
+        #     projections (gating-init), ``linear_*_p`` are value projections.   #
+        #                                                                        #
+        #   Step 5 — Combine via outer-product over the row/col axes:            #
+        #       x = self._combine_projections(a, b)      # [*, N, N, c_hidden]   #
+        #     Outgoing: x_ij = sum_k a_ik · b_jk    (rows share, cols contract)  #
+        #     Incoming: x_ij = sum_k a_ki · b_kj    (cols share, rows contract)  #
+        #     (The fp16 branch above renormalizes a/b first to avoid overflow    #
+        #      inside the matmul — match it as in the reference if you care      #
+        #      about half-precision parity.)                                     #
+        #                                                                        #
+        #   Step 6 — Project back to ``c_z`` and gate by the original (post-LN)  #
+        #     z (gate uses the same z that fed steps 3-4):                       #
+        #       x = self.linear_z(self.layer_norm_out(x))                        #
+        #       x = x * self.sigmoid(self.linear_g(z))                           #
+        #                                                                        #
+        #   Step 7 — Fold in the residual if requested:                          #
+        #       if z_in is not None: x = x + z_in                                #
+        #   Return ``x``.                                                        #
+        #                                                                        #
+        # TODO: 算法 11 (outgoing) / 算法 12 (incoming)。                         #
+        #   子类通过 partialmethod 固定 ``self._outgoing``，                      #
+        #   唯一依赖它的分支在 ``_combine_projections`` 里。                      #
+        #                                                                        #
+        #   步骤 1 — mask 默认为全 1，并补一个通道维度使其能与                    #
+        #     [*, N, N, c_hidden] 的投影广播:                                    #
+        #       if mask is None:                                                 #
+        #           mask = z.new_ones(z.shape[:-1])                              #
+        #       mask = mask.unsqueeze(-1)               # [*, N, N, 1]           #
+        #                                                                        #
+        #   步骤 2 — 若 ``_add_with_inplace`` 为 True，先保留输入做融合残差加:    #
+        #       z_in = z.clone() if _add_with_inplace else None                  #
+        #                                                                        #
+        #   步骤 3 — Pre-LayerNorm:                                              #
+        #       z = self.layer_norm_in(z)                # [*, N, N, c_z]        #
+        #                                                                        #
+        #   步骤 4 — 两路门控投影到隐藏维 ``c_hidden``:                            #
+        #       a = mask * self.sigmoid(self.linear_a_g(z)) * self.linear_a_p(z) #
+        #       b = mask * self.sigmoid(self.linear_b_g(z)) * self.linear_b_p(z) #
+        #     ``linear_*_g`` 用 gating-init，``linear_*_p`` 是值投影。            #
+        #                                                                        #
+        #   步骤 5 — 沿行/列的外积式组合:                                          #
+        #       x = self._combine_projections(a, b)      # [*, N, N, c_hidden]   #
+        #     Outgoing: x_ij = sum_k a_ik · b_jk    (行共享、列收缩)              #
+        #     Incoming: x_ij = sum_k a_ki · b_kj    (列共享、行收缩)              #
+        #     (上方 fp16 分支先做 a/b 标准化再 matmul 防溢出，                    #
+        #      若要严格匹配半精度行为也照搬。)                                    #
+        #                                                                        #
+        #   步骤 6 — 投回 ``c_z`` 并按 (步骤 3-4 后的) z 做门控:                   #
+        #       x = self.linear_z(self.layer_norm_out(x))                        #
+        #       x = x * self.sigmoid(self.linear_g(z))                           #
+        #                                                                        #
+        #   步骤 7 — 必要时把残差加回来:                                           #
+        #       if z_in is not None: x = x + z_in                                #
+        #   返回 ``x``。                                                          #
         ##########################################################################
 
         if mask is None:
@@ -566,22 +627,84 @@ class TriangleAttention(nn.Module):
             [*, I, J, C_in] updated pair tensor.
         """
         ##########################################################################
-        # TODO: Algorithm 13/14. Triangle attention with pair bias.              #
-        #   1. Transpose I↔J if ending-node attention (self.starting is False). #
-        #   2. LayerNorm x.                                                      #
-        #   3. Build two attention biases:                                        #
-        #         mask_bias       = inf*(mask-1)                                 #
-        #         triangle_bias   = self.linear(x) reshaped to [*, H, I, J]      #
-        #   4. Run multi-head attention with biases.                             #
-        #   5. Transpose back if needed.                                         #
-        # TODO: Algorithm 13/14. 带 pair bias 的三角形注意力。                  #
-        #   1. 若 ending-node (starting=False) 先把 I↔J 转置。                  #
-        #   2. 对 x 做 LayerNorm。                                              #
-        #   3. 构造两个 attention bias:                                          #
-        #         mask_bias     = inf*(mask-1)                                   #
-        #         triangle_bias = self.linear(x) 调整成 [*, H, I, J]            #
-        #   4. 多头注意力 + 上述 bias。                                          #
-        #   5. 若之前转置过，再转回来。                                          #
+        # TODO: Algorithm 13 (starting node) / Algorithm 14 (ending node).       #
+        #                                                                        #
+        #   Step 1 — Default mask to ones over the [*, I, J] pair grid:          #
+        #       if mask is None:                                                 #
+        #           mask = x.new_ones(x.shape[:-1])      # [*, I, J]             #
+        #                                                                        #
+        #   Step 2 — For ending-node attention we run the same module but        #
+        #     swap rows<->columns physically so the attention sums along the     #
+        #     starting-node axis:                                                #
+        #       if not self.starting:                                            #
+        #           x    = x.transpose(-2, -3)           # [*, J, I, c_in]       #
+        #           mask = mask.transpose(-1, -2)        # [*, J, I]             #
+        #                                                                        #
+        #   Step 3 — Pre-LayerNorm on the channel dim:                           #
+        #       x = self.layer_norm(x)                   # [*, I, J, c_in]       #
+        #                                                                        #
+        #   Step 4 — Build the two attention biases the MHA expects:             #
+        #     (a) Masking bias: -inf where mask=0, 0 otherwise; shape must be    #
+        #         broadcastable to attention scores [*, I, H, q, k]:             #
+        #           mask_bias = (self.inf * (mask - 1))[..., :, None, None, :]   #
+        #         (Two None-inserts add the head and query axes.)                #
+        #     (b) Triangle bias: per-head learned bias from x. ``self.linear``   #
+        #         is OpenfoldLinear(c_in -> no_heads, bias=False). Permute the   #
+        #         head channel to position -3 (to become heads) and add a fake   #
+        #         "row" axis at -4 so it broadcasts across queries:              #
+        #           triangle_bias = permute_final_dims(                          #
+        #               self.linear(x), (2, 0, 1)                                #
+        #           ).unsqueeze(-4)                                              #
+        #       biases = [mask_bias, triangle_bias]                              #
+        #                                                                        #
+        #   Step 5 — Run multi-head attention with chunking if requested:        #
+        #       if chunk_size is not None:                                       #
+        #           x = self._chunk(x, biases, chunk_size,                       #
+        #                           inplace_safe=inplace_safe)                   #
+        #       else:                                                            #
+        #           x = self.mha(q_x=x, kv_x=x, biases=biases)                   #
+        #                                                                        #
+        #   Step 6 — Undo the row/col swap for ending-node mode:                 #
+        #       if not self.starting:                                            #
+        #           x = x.transpose(-2, -3)              # back to [*, I, J, c]  #
+        #                                                                        #
+        # TODO: 算法 13 (starting node) / 算法 14 (ending node)。                 #
+        #                                                                        #
+        #   步骤 1 — mask 默认全 1，作用在 [*, I, J] pair 网格上:                  #
+        #       if mask is None:                                                 #
+        #           mask = x.new_ones(x.shape[:-1])      # [*, I, J]             #
+        #                                                                        #
+        #   步骤 2 — ending-node 模式下，物理转置 I<->J，使注意力沿“起点”维度求和:  #
+        #       if not self.starting:                                            #
+        #           x    = x.transpose(-2, -3)           # [*, J, I, c_in]       #
+        #           mask = mask.transpose(-1, -2)        # [*, J, I]             #
+        #                                                                        #
+        #   步骤 3 — 通道维上 Pre-LayerNorm:                                       #
+        #       x = self.layer_norm(x)                   # [*, I, J, c_in]       #
+        #                                                                        #
+        #   步骤 4 — 构造 MHA 所需的两路 bias:                                     #
+        #     (a) mask bias: mask=0 处为 -inf，其余 0；形状要能广播到注意力分数    #
+        #         [*, I, H, q, k]:                                              #
+        #           mask_bias = (self.inf * (mask - 1))[..., :, None, None, :]   #
+        #         (两个 None 分别插入 head 维和 query 维。)                        #
+        #     (b) triangle bias: ``self.linear`` 是                                #
+        #         OpenfoldLinear(c_in -> no_heads, bias=False)，把通道维转成     #
+        #         head 维(位置 -3)，再在 -4 处插假“行”维以广播到 query:           #
+        #           triangle_bias = permute_final_dims(                          #
+        #               self.linear(x), (2, 0, 1)                                #
+        #           ).unsqueeze(-4)                                              #
+        #       biases = [mask_bias, triangle_bias]                              #
+        #                                                                        #
+        #   步骤 5 — 多头注意力 (按需 chunk):                                       #
+        #       if chunk_size is not None:                                       #
+        #           x = self._chunk(x, biases, chunk_size,                       #
+        #                           inplace_safe=inplace_safe)                   #
+        #       else:                                                            #
+        #           x = self.mha(q_x=x, kv_x=x, biases=biases)                   #
+        #                                                                        #
+        #   步骤 6 — ending-node 模式下，把行列转回来:                              #
+        #       if not self.starting:                                            #
+        #           x = x.transpose(-2, -3)              # 回到 [*, I, J, c]     #
         ##########################################################################
 
         if mask is None:

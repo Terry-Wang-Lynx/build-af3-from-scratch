@@ -117,17 +117,98 @@ class TemplateEmbedder(nn.Module):
         if the module was built with ``n_blocks=0``.
         """
         ##########################################################################
-        # TODO: Algorithm 16. For each template:                                 #
-        #   1. Build per-chain mask + LayerNorm z.                               #
-        #   2. ``single_template_forward`` builds a small PairformerStack input  #
-        #      from the template (distogram + frames + aatype) and runs it.      #
-        #   3. Average across templates, ReLU, and project via linear_no_bias_u  #
-        #      to the pair channel.                                              #
-        # TODO: Algorithm 16。对每个模板:                                       #
-        #   1. 构造 chain-mask、LayerNorm z。                                    #
-        #   2. ``single_template_forward`` 用模板特征 (distogram / frame /     #
-        #      aatype) 喂一遍小型 PairformerStack。                              #
-        #   3. 对模板取平均、ReLU，再 linear_no_bias_u 投回 pair 通道。          #
+        # TODO: Algorithm 16 — TemplateEmbedder. Folds structural templates    #
+        #   into the pair representation.                                       #
+        #                                                                        #
+        #   Step 1 — Cheap early-exit when there is nothing to do:               #
+        #       if ("template_aatype" not in input_feature_dict                  #
+        #           or self.n_blocks < 1):                                       #
+        #           return 0                  # broadcasts as a scalar           #
+        #                                                                        #
+        #   Step 2 — Build the per-pair “same-chain” mask from ``asym_id``       #
+        #     (templates only inform pairs within a single chain) and default    #
+        #     the pair mask:                                                     #
+        #       asym_id = input_feature_dict["asym_id"]                          #
+        #       multichain_mask = (asym_id[:, None] == asym_id[None, :])        #
+        #                            .to(z.dtype)         # [N_tok, N_tok]      #
+        #       num_residues     = z.shape[0]                                    #
+        #       num_templates    = input_feature_dict["template_aatype"]         #
+        #                                .shape[0]                              #
+        #       query_num_channels = z.shape[-1]                                 #
+        #       if pair_mask is None:                                           #
+        #           pair_mask = z.new_ones(z.shape[:-1])                        #
+        #                                                                        #
+        #   Step 3 — Pre-LayerNorm the pair representation once. The same       #
+        #     normalized ``z`` feeds every template-specific branch:             #
+        #       z = self.layernorm_z(z)                                         #
+        #                                                                        #
+        #   Step 4 — Sum the per-template embeddings produced by                 #
+        #     ``self.single_template_forward`` (which concatenates the           #
+        #     template distogram / frames / unit-vector / aatype features,       #
+        #     adds them to ``self.linear_no_bias_z(z)``, runs a small             #
+        #     PairformerStack, and ``layernorm_v`` ’s the result):                #
+        #       u = 0                                                            #
+        #       for template_id in range(num_templates):                         #
+        #           u = u + self.single_template_forward(                        #
+        #               template_id        = template_id,                        #
+        #               input_feature_dict = input_feature_dict,                 #
+        #               z                  = z,                                  #
+        #               pair_mask          = pair_mask,                          #
+        #               multichain_mask    = multichain_mask,                    #
+        #           )                                                            #
+        #                                                                        #
+        #   Step 5 — Average across templates (with ``+1e-7`` to be safe when    #
+        #     ``num_templates == 0``), ReLU, then project back to ``c_z``:       #
+        #       u = u / (1e-7 + num_templates)                                   #
+        #       u = self.linear_no_bias_u(self.relu(u))                          #
+        #       assert u.shape == (num_residues, num_residues,                   #
+        #                          query_num_channels)                          #
+        #   Return ``u`` (the caller adds this to ``z`` outside).                #
+        #                                                                        #
+        # TODO: 算法 16 —— TemplateEmbedder。把结构模板信息汇入 pair 表示。      #
+        #                                                                        #
+        #   步骤 1 — 廉价提前返回:                                                  #
+        #       if ("template_aatype" not in input_feature_dict                  #
+        #           or self.n_blocks < 1):                                       #
+        #           return 0                  # 当作标量广播                      #
+        #                                                                        #
+        #   步骤 2 — 用 ``asym_id`` 构造“同链 pair 掩码” (模板只贡献同链内 pair)   #
+        #     并设置默认 pair mask:                                                #
+        #       asym_id = input_feature_dict["asym_id"]                          #
+        #       multichain_mask = (asym_id[:, None] == asym_id[None, :])        #
+        #                            .to(z.dtype)         # [N_tok, N_tok]      #
+        #       num_residues     = z.shape[0]                                    #
+        #       num_templates    = input_feature_dict["template_aatype"]         #
+        #                                .shape[0]                              #
+        #       query_num_channels = z.shape[-1]                                 #
+        #       if pair_mask is None:                                           #
+        #           pair_mask = z.new_ones(z.shape[:-1])                        #
+        #                                                                        #
+        #   步骤 3 — 对 z 做一次 Pre-LayerNorm，同一份归一化后的 ``z`` 喂给         #
+        #     所有模板分支:                                                       #
+        #       z = self.layernorm_z(z)                                         #
+        #                                                                        #
+        #   步骤 4 — 累加每个模板的嵌入 (``single_template_forward`` 内部把模板    #
+        #     特征 distogram / frames / unit-vector / aatype 拼接，叠加          #
+        #     ``self.linear_no_bias_z(z)``，跑小型 PairformerStack，再过           #
+        #     ``layernorm_v``):                                                   #
+        #       u = 0                                                            #
+        #       for template_id in range(num_templates):                         #
+        #           u = u + self.single_template_forward(                        #
+        #               template_id        = template_id,                        #
+        #               input_feature_dict = input_feature_dict,                 #
+        #               z                  = z,                                  #
+        #               pair_mask          = pair_mask,                          #
+        #               multichain_mask    = multichain_mask,                    #
+        #           )                                                            #
+        #                                                                        #
+        #   步骤 5 — 沿模板维取均值 (+1e-7 保护 0 个模板的情况)、ReLU，再投回      #
+        #     ``c_z``:                                                           #
+        #       u = u / (1e-7 + num_templates)                                   #
+        #       u = self.linear_no_bias_u(self.relu(u))                          #
+        #       assert u.shape == (num_residues, num_residues,                   #
+        #                          query_num_channels)                          #
+        #   返回 ``u`` (调用方负责把它加回 ``z``)。                                 #
         ##########################################################################
 
         if "template_aatype" not in input_feature_dict or self.n_blocks < 1:

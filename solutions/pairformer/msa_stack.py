@@ -94,23 +94,72 @@ class MSAPairWeightedAveraging(nn.Module):
             [..., N_msa, N_token, c_m] updated MSA embedding.
         """
         ##########################################################################
-        # TODO: Algorithm 10. MSAPairWeightedAveraging.                          #
-        #   1. LayerNorm m -> project to value v via linear_no_bias_mv, reshape  #
-        #      to [..., N_msa, N_token, H, c].                                   #
-        #   2. From z: LayerNorm + linear_no_bias_z -> per-head bias             #
-        #      b: [..., N_token, N_token, H].                                    #
-        #   3. From m: sigmoid(linear_no_bias_mg) -> gate g, reshape per-head.  #
-        #   4. Compute attention weights w = softmax(b, dim=-2).                #
-        #   5. Aggregate: wv = einsum('...ijh,...mjhc->...mihc', w, v).         #
-        #   6. Combine with gate: o = g * wv, flatten heads, project via         #
-        #      linear_no_bias_out.                                               #
-        # TODO: Algorithm 10。MSAPairWeightedAveraging。                         #
-        #   1. LayerNorm m，linear_no_bias_mv 投影到 value，reshape 出头维。     #
-        #   2. 从 z 经 LayerNorm + linear_no_bias_z 得每头偏置 b。               #
-        #   3. 从 m 经 sigmoid(linear_no_bias_mg) 得门控 g。                     #
-        #   4. softmax(b, dim=-2) 得注意力权重 w。                               #
-        #   5. einsum('...ijh,...mjhc->...mihc', w, v) 聚合得 wv。               #
-        #   6. o = g * wv，扁平化头维后用 linear_no_bias_out 投回 c_m。          #
+        # TODO: Algorithm 10 — MSA Pair-Weighted Averaging.                      #
+        #   Send the pair representation back into the MSA: each pair (i, j)    #
+        #   contributes a per-head weight ``w_ij^h`` that is used to average     #
+        #   value vectors across the residue (``j``) axis of the MSA.            #
+        #                                                                        #
+        #   Step 1 — Pre-LayerNorm and value projection from MSA:                #
+        #       m = self.layernorm_m(m)                  # [*, N_msa, N_tok, c_m]#
+        #       v = self.linear_no_bias_mv(m).reshape(                           #
+        #               *m.shape[:-1], self.n_heads, self.c                      #
+        #           )                                    # [*, N_msa, N_tok, H, c]#
+        #                                                                        #
+        #   Step 2 — Per-head logits from the pair representation:               #
+        #       b = self.linear_no_bias_z(self.layernorm_z(z))                   #
+        #                                                # [*, N_tok, N_tok, H]  #
+        #     ``linear_no_bias_z`` is LinearNoBias(c_z -> H).                    #
+        #                                                                        #
+        #   Step 3 — Per-position output gate from MSA (zero-init, opens later): #
+        #       g = torch.sigmoid(self.linear_no_bias_mg(m)).reshape(            #
+        #               *m.shape[:-1], self.n_heads, self.c                      #
+        #           )                                    # [*, N_msa, N_tok, H, c]#
+        #                                                                        #
+        #   Step 4 — Softmax across the second residue axis of the pair grid:    #
+        #       w = self.softmax_w(b)                    # softmax over dim=-2   #
+        #     This gives w_ij^h ∝ exp(b_ij^h), normalized over j for each (i,h). #
+        #                                                                        #
+        #   Step 5 — Weighted average of MSA value vectors along the ``j`` axis: #
+        #       wv = torch.einsum('...ijh,...mjhc->...mihc', w, v)               #
+        #     i.e. ``wv[*, m, i, h, c] = sum_j w[*, i, j, h] * v[*, m, j, h, c]``#
+        #                                                                        #
+        #   Step 6 — Apply the gate, flatten the head dim, project back to c_m:  #
+        #       o = (g * wv).reshape(*g.shape[:-2], self.n_heads * self.c)       #
+        #       m = self.linear_no_bias_out(o)            # [*, N_msa, N_tok, c_m]#
+        #   Return ``m`` (zero-init projection -> residual starts as identity). #
+        #                                                                        #
+        # TODO: 算法 10 —— MSA Pair-Weighted Averaging。                          #
+        #   把 pair 表示送回 MSA: 每个 pair (i, j) 给出一个每头权重 w_ij^h，      #
+        #   用它沿 MSA 的 residue (j) 轴对 value 加权平均。                       #
+        #                                                                        #
+        #   步骤 1 — Pre-LayerNorm 并从 MSA 投影出 value:                          #
+        #       m = self.layernorm_m(m)                  # [*, N_msa, N_tok, c_m]#
+        #       v = self.linear_no_bias_mv(m).reshape(                           #
+        #               *m.shape[:-1], self.n_heads, self.c                      #
+        #           )                                    # [*, N_msa, N_tok, H, c]#
+        #                                                                        #
+        #   步骤 2 — 从 pair 表示得到每头 logits:                                   #
+        #       b = self.linear_no_bias_z(self.layernorm_z(z))                   #
+        #                                                # [*, N_tok, N_tok, H]  #
+        #     ``linear_no_bias_z`` 是 LinearNoBias(c_z -> H)。                    #
+        #                                                                        #
+        #   步骤 3 — 从 MSA 得到每位点输出门控 (零初始化，逐步学开):                #
+        #       g = torch.sigmoid(self.linear_no_bias_mg(m)).reshape(            #
+        #               *m.shape[:-1], self.n_heads, self.c                      #
+        #           )                                    # [*, N_msa, N_tok, H, c]#
+        #                                                                        #
+        #   步骤 4 — 沿 pair 网格的“第二条 residue 轴”做 softmax:                  #
+        #       w = self.softmax_w(b)                    # softmax(dim=-2)       #
+        #     即 w_ij^h ∝ exp(b_ij^h)，对每个 (i, h) 沿 j 归一。                  #
+        #                                                                        #
+        #   步骤 5 — 沿 j 轴对 value 做加权平均:                                    #
+        #       wv = torch.einsum('...ijh,...mjhc->...mihc', w, v)               #
+        #     即 ``wv[*, m, i, h, c] = sum_j w[*, i, j, h] * v[*, m, j, h, c]``  #
+        #                                                                        #
+        #   步骤 6 — 应用门控、扁平化头维、投回 c_m:                                #
+        #       o = (g * wv).reshape(*g.shape[:-2], self.n_heads * self.c)       #
+        #       m = self.linear_no_bias_out(o)            # [*, N_msa, N_tok, c_m]#
+        #   返回 ``m`` (零初始化的输出投影 -> 残差从恒等开始)。                    #
         ##########################################################################
 
         m = self.layernorm_m(m)
@@ -471,17 +520,124 @@ class MSAModule(nn.Module):
             updated ``z``, same shape.
         """
         ##########################################################################
-        # TODO: Algorithm 8. MSAModule.                                          #
-        #   1. Early-exit if no MSA features are provided.                       #
-        #   2. Sub-sample the MSA (random without replacement), one-hot encode  #
-        #      the residue identities, concatenate with deletion features.       #
-        #   3. Project: msa_sample = linear_no_bias_m(...) + linear_no_bias_s(s).#
-        #   4. Run all MSABlocks: for each block do block(msa_sample, z).        #
-        # TODO: Algorithm 8。MSAModule。                                         #
-        #   1. 没有 MSA 特征则原样返回 z。                                       #
-        #   2. 随机采样 MSA 子集，对残基 one-hot，再和删除特征拼起来。           #
-        #   3. msa_sample = linear_no_bias_m(...) + linear_no_bias_s(s)。        #
-        #   4. 依次跑所有 MSABlock。                                             #
+        # TODO: Algorithm 8 — MSAModule.                                         #
+        #   Runs ``n_blocks`` MSABlocks. Each block does: OuterProductMean       #
+        #   (MSA -> z), MSAPairWeightedAveraging (z -> MSA) + Transition,        #
+        #   and one PairformerBlock pair update.                                 #
+        #                                                                        #
+        #   Step 1 — Cheap early-exits when there is nothing to do:              #
+        #       if self.n_blocks < 1 or "msa" not in input_feature_dict:         #
+        #           return z                                                     #
+        #       if input_feature_dict["msa"].dim() < 2:                          #
+        #           return z                                                     #
+        #                                                                        #
+        #   Step 2 — Sub-sample the MSA without replacement (uses train/test     #
+        #     cutoffs configured at __init__ time). All three MSA features       #
+        #     (``msa``, ``has_deletion``, ``deletion_value``) are sub-sampled    #
+        #     along their N_msa axis (dim=-2):                                   #
+        #       msa_feat = sample_msa_feature_dict_random_without_replacement(   #
+        #           feat_dict   = input_feature_dict,                            #
+        #           dim_dict    = {feat_name: -2 for feat_name in                #
+        #                            self.input_feature},                        #
+        #           cutoff      = self.msa_configs["train_cutoff"]               #
+        #                          if self.training                              #
+        #                          else self.msa_configs["test_cutoff"],         #
+        #           lower_bound = self.msa_configs["train_lowerb"]               #
+        #                          if self.training                              #
+        #                          else self.msa_configs["test_lowerb"],        #
+        #           strategy    = self.msa_configs["strategy"],                  #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 3 — One-hot the residue type (``msa``) into 32 classes. For     #
+        #     very long inference sequences keep the one-hot in fp32 to halve    #
+        #     peak memory (see ``one_hot_fp32`` helper); otherwise use           #
+        #     ``F.one_hot`` which returns int64:                                 #
+        #       if not self.training and z.shape[-2] > 2000:                     #
+        #           msa_feat["msa"] = self.one_hot_fp32(                         #
+        #               msa_feat["msa"], num_classes=self.input_feature["msa"]) #
+        #       else:                                                            #
+        #           msa_feat["msa"] = F.one_hot(                                 #
+        #               msa_feat["msa"], num_classes=self.input_feature["msa"]) #
+        #                                                                        #
+        #   Step 4 — Concatenate ``msa``, ``has_deletion``, ``deletion_value``   #
+        #     along the channel dim (sizes 32 / 1 / 1 -> 34):                    #
+        #       target_shape = msa_feat["msa"].shape[:-1]                        #
+        #       msa_sample = torch.cat(                                         #
+        #           [ msa_feat[name].reshape(*target_shape, d)                  #
+        #             for name, d in self.input_feature.items() ],              #
+        #           dim=-1,                                                      #
+        #       )   # [*, N_msa_sample, N_token, 34]                            #
+        #       if not self.training: del msa_feat                              #
+        #                                                                        #
+        #   Step 5 — Linear-project the concatenated features to ``c_m`` and    #
+        #     add the broadcast contribution from the single inputs (so the    #
+        #     MSA channel is conditioned on the per-token single embedding):    #
+        #       msa_sample = self.linear_no_bias_m(msa_sample)                  #
+        #       msa_sample = msa_sample + self.linear_no_bias_s(s_inputs)       #
+        #                                                                        #
+        #   Step 6 — Run all MSABlocks. Each returns updated (msa_sample, z);   #
+        #     the very last block returns ``msa_sample = None`` since the MSA   #
+        #     stream is no longer needed downstream:                            #
+        #       for block in self.blocks:                                       #
+        #           msa_sample, z = block(msa_sample, z, pair_mask=pair_mask)   #
+        #   Return ``z``.                                                       #
+        #                                                                        #
+        # TODO: 算法 8 —— MSAModule。                                            #
+        #   依次跑 ``n_blocks`` 个 MSABlock。每块做                                #
+        #   OuterProductMean (MSA -> z)、MSAPairWeightedAveraging (z -> MSA)     #
+        #   + Transition，最后一次 PairformerBlock 的 pair 更新。                #
+        #                                                                        #
+        #   步骤 1 — 廉价提前返回:                                                  #
+        #       if self.n_blocks < 1 or "msa" not in input_feature_dict:         #
+        #           return z                                                     #
+        #       if input_feature_dict["msa"].dim() < 2:                          #
+        #           return z                                                     #
+        #                                                                        #
+        #   步骤 2 — 不放回随机采样 MSA 子集 (训练/推理 cutoff 在 __init__ 中配置)。 #
+        #     三个 MSA 特征 (``msa``, ``has_deletion``, ``deletion_value``) 均    #
+        #     沿 N_msa 轴 (dim=-2) 一起采样:                                       #
+        #       msa_feat = sample_msa_feature_dict_random_without_replacement(   #
+        #           feat_dict   = input_feature_dict,                            #
+        #           dim_dict    = {feat_name: -2 for feat_name in                #
+        #                            self.input_feature},                        #
+        #           cutoff      = self.msa_configs["train_cutoff"]               #
+        #                          if self.training                              #
+        #                          else self.msa_configs["test_cutoff"],         #
+        #           lower_bound = self.msa_configs["train_lowerb"]               #
+        #                          if self.training                              #
+        #                          else self.msa_configs["test_lowerb"],        #
+        #           strategy    = self.msa_configs["strategy"],                  #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 3 — 残基类型 (``msa``) one-hot 到 32 类。长序列推理时用 fp32      #
+        #     版本减半显存:                                                       #
+        #       if not self.training and z.shape[-2] > 2000:                     #
+        #           msa_feat["msa"] = self.one_hot_fp32(                         #
+        #               msa_feat["msa"], num_classes=self.input_feature["msa"]) #
+        #       else:                                                            #
+        #           msa_feat["msa"] = F.one_hot(                                 #
+        #               msa_feat["msa"], num_classes=self.input_feature["msa"]) #
+        #                                                                        #
+        #   步骤 4 — 沿通道维拼接 ``msa`` / ``has_deletion`` / ``deletion_value`` #
+        #     (32 / 1 / 1 -> 34):                                                #
+        #       target_shape = msa_feat["msa"].shape[:-1]                        #
+        #       msa_sample = torch.cat(                                         #
+        #           [ msa_feat[name].reshape(*target_shape, d)                  #
+        #             for name, d in self.input_feature.items() ],              #
+        #           dim=-1,                                                      #
+        #       )   # [*, N_msa_sample, N_token, 34]                            #
+        #       if not self.training: del msa_feat                              #
+        #                                                                        #
+        #   步骤 5 — 投到 c_m 并叠加单序列广播贡献                                  #
+        #     (使 MSA 通道以每 token 的 single 嵌入为条件):                       #
+        #       msa_sample = self.linear_no_bias_m(msa_sample)                  #
+        #       msa_sample = msa_sample + self.linear_no_bias_s(s_inputs)       #
+        #                                                                        #
+        #   步骤 6 — 跑完所有 MSABlock。最后一块返回 ``msa_sample = None``        #
+        #     (后续不再需要 MSA 流):                                              #
+        #       for block in self.blocks:                                       #
+        #           msa_sample, z = block(msa_sample, z, pair_mask=pair_mask)   #
+        #   返回 ``z``。                                                          #
         ##########################################################################
 
         if self.n_blocks < 1 or "msa" not in input_feature_dict:

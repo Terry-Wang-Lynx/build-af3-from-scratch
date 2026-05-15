@@ -150,18 +150,110 @@ class DiffusionConditioning(nn.Module):
                 - z (torch.Tensor): [..., N_tokens, N_tokens, c_z]
         """
         ##########################################################################
-        # TODO: Algorithm 21. Build (s, z) for the current diffusion step.       #
-        #   1. If ``pair_z`` cache is missing, compute it from relp + z_trunk via#
-        #      ``prepare_cache``.                                                #
-        #   2. Concatenate s_trunk + s_inputs along channel, project to c_s.    #
-        #   3. Add a Fourier embedding of the noise level (log(t/sigma)/4),     #
-        #      LayerNorm + Linear.                                              #
-        #   4. Apply two Transition blocks (residual SwiGLU FFN) to single_s.   #
-        # TODO: Algorithm 21. 为当前扩散步构造 (s, z)。                          #
-        #   1. ``pair_z`` 缓存为空时，用 ``prepare_cache`` 从 relp + z_trunk 算。#
-        #   2. 沿通道拼 s_trunk + s_inputs，再线性投影到 c_s。                   #
-        #   3. 噪声水平做 Fourier embedding (log(t/sigma)/4)，LN+Linear 后加到 s。#
-        #   4. 跑两次 Transition (残差 SwiGLU FFN)。                             #
+        # TODO: Algorithm 21 — DiffusionConditioning. Builds the (s, z)         #
+        #   embeddings that feed every diffusion denoising step from the trunk   #
+        #   outputs plus the current noise level.                               #
+        #                                                                        #
+        #   Step 1 — Pair-side cache. ``pair_z`` is invariant across diffusion   #
+        #     samples for a given trunk output and can be computed once and      #
+        #     reused (the caller passes ``None`` only on the first call). When  #
+        #     conditioning is disabled (training-time classifier-free guidance) #
+        #     we zero out the trunk before building ``pair_z`` so the module    #
+        #     learns to denoise from noise level alone:                          #
+        #       if pair_z is None:                                               #
+        #           if not use_conditioning:                                     #
+        #               if inplace_safe:                                         #
+        #                   s_trunk *= 0; z_trunk *= 0                           #
+        #               else:                                                    #
+        #                   s_trunk = 0 * s_trunk                                #
+        #                   z_trunk = 0 * z_trunk                                #
+        #           pair_z = self.prepare_cache(relp_feature, z_trunk,           #
+        #                                       inplace_safe)                    #
+        #       else:                                                            #
+        #           if inplace_safe:                                             #
+        #               pair_z = pair_z.clone()      # cached, do not mutate    #
+        #                                                                        #
+        #   Step 2 — Single-side conditioning. Concatenate (trunk single,        #
+        #     input single) along the channel dim, then LN + linear-project     #
+        #     back to ``c_s``:                                                   #
+        #       single_s = torch.cat([s_trunk, s_inputs], dim=-1)               #
+        #                                       # [..., N_tok, c_s + c_s_inputs]#
+        #       single_s = self.linear_no_bias_s(self.layernorm_s(single_s))    #
+        #                                       # [..., N_tok, c_s]             #
+        #                                                                        #
+        #   Step 3 — Fourier-embed the rescaled log noise level                  #
+        #     ``log(t_hat / sigma_data) / 4`` to a [..., N_sample, c_in]         #
+        #     feature, normalize and project to ``c_s``, then **broadcast-add**  #
+        #     to ``single_s`` so each sample carries the same per-token         #
+        #     conditioning plus its own noise level:                             #
+        #       noise_n = self.fourier_embedding(                                #
+        #           t_hat_noise_level=torch.log(                                 #
+        #               input=t_hat_noise_level / self.sigma_data                #
+        #           ) / 4                                                        #
+        #       ).to(single_s.dtype)               # [..., N_sample, c_in]      #
+        #       single_s = single_s.unsqueeze(dim=-3) + self.linear_no_bias_n(   #
+        #                      self.layernorm_n(noise_n)                        #
+        #                  ).unsqueeze(dim=-2)                                   #
+        #                                       # [..., N_sample, N_tok, c_s]   #
+        #                                                                        #
+        #   Step 4 — Two residual Transition (SwiGLU FFN) blocks finish the      #
+        #     single conditioning. Use the inplace branch when safe:             #
+        #       if inplace_safe:                                                 #
+        #           single_s += self.transition_s1(single_s)                    #
+        #           single_s += self.transition_s2(single_s)                    #
+        #       else:                                                            #
+        #           single_s = single_s + self.transition_s1(single_s)         #
+        #           single_s = single_s + self.transition_s2(single_s)         #
+        #   Return ``(single_s, pair_z)``.                                       #
+        #                                                                        #
+        # TODO: 算法 21 —— DiffusionConditioning。从主干输出 + 当前噪声水平        #
+        #   构造每个扩散去噪步使用的 (s, z) 嵌入。                                  #
+        #                                                                        #
+        #   步骤 1 — pair 侧缓存。给定主干输出后，``pair_z`` 对所有扩散样本不变，    #
+        #     只在首次调用时计算 (调用方传 ``None``)。关闭条件 (训练 CFG) 时先把    #
+        #     主干清零，让模块学会仅依据噪声水平去噪:                                #
+        #       if pair_z is None:                                               #
+        #           if not use_conditioning:                                     #
+        #               if inplace_safe:                                         #
+        #                   s_trunk *= 0; z_trunk *= 0                           #
+        #               else:                                                    #
+        #                   s_trunk = 0 * s_trunk                                #
+        #                   z_trunk = 0 * z_trunk                                #
+        #           pair_z = self.prepare_cache(relp_feature, z_trunk,           #
+        #                                       inplace_safe)                    #
+        #       else:                                                            #
+        #           if inplace_safe:                                             #
+        #               pair_z = pair_z.clone()      # 缓存复用前 clone 一下     #
+        #                                                                        #
+        #   步骤 2 — single 侧拼接 (trunk single, input single) 后 LN + 线性投回    #
+        #     ``c_s``:                                                            #
+        #       single_s = torch.cat([s_trunk, s_inputs], dim=-1)               #
+        #                                       # [..., N_tok, c_s + c_s_inputs]#
+        #       single_s = self.linear_no_bias_s(self.layernorm_s(single_s))    #
+        #                                       # [..., N_tok, c_s]             #
+        #                                                                        #
+        #   步骤 3 — 对缩放后的 log 噪声水平 ``log(t_hat / sigma_data) / 4`` 做     #
+        #     Fourier embedding，得到 [..., N_sample, c_in]；                       #
+        #     LN + 投到 c_s 后**广播加**到 ``single_s``，使每个样本带相同的            #
+        #     每 token 条件 + 自身噪声水平:                                          #
+        #       noise_n = self.fourier_embedding(                                #
+        #           t_hat_noise_level=torch.log(                                 #
+        #               input=t_hat_noise_level / self.sigma_data                #
+        #           ) / 4                                                        #
+        #       ).to(single_s.dtype)               # [..., N_sample, c_in]      #
+        #       single_s = single_s.unsqueeze(dim=-3) + self.linear_no_bias_n(   #
+        #                      self.layernorm_n(noise_n)                        #
+        #                  ).unsqueeze(dim=-2)                                   #
+        #                                       # [..., N_sample, N_tok, c_s]   #
+        #                                                                        #
+        #   步骤 4 — 两次残差 Transition (SwiGLU FFN) 收尾。安全时走 inplace:        #
+        #       if inplace_safe:                                                 #
+        #           single_s += self.transition_s1(single_s)                    #
+        #           single_s += self.transition_s2(single_s)                    #
+        #       else:                                                            #
+        #           single_s = single_s + self.transition_s1(single_s)         #
+        #           single_s = single_s + self.transition_s2(single_s)         #
+        #   返回 ``(single_s, pair_z)``。                                          #
         ##########################################################################
 
         if pair_z is None:
@@ -520,17 +612,96 @@ class DiffusionModule(nn.Module):
                 [..., N_sample, N_atom,3]
         """
         ##########################################################################
-        # TODO: EDM single-step denoise wrapper (Algorithm 20).                  #
-        #   1. Scale ``x_noisy`` by c_in = 1/sqrt(sigma_data^2 + sigma^2).        #
-        #   2. Call ``self.f_forward`` to get the raw network update r_update.   #
-        #   3. Combine: x_denoised = c_skip*x + c_out*r_update where             #
-        #        s_ratio = sigma / sigma_data                                   #
-        #        c_skip = 1 / (1 + s_ratio^2)                                   #
-        #        c_out  = sigma / sqrt(1 + s_ratio^2)                            #
-        # TODO: EDM 单步去噪封装 (Algorithm 20)。                                #
-        #   1. 用 c_in = 1/sqrt(sigma_data^2 + sigma^2) 缩放 x_noisy。           #
-        #   2. 调 ``self.f_forward`` 得到原始网络输出 r_update。                 #
-        #   3. 按 EDM 公式合成 x_denoised = c_skip*x + c_out*r_update。          #
+        # TODO: Algorithm 20 — DiffusionModule (EDM single-step denoise).        #
+        #   Wraps the raw network ``self.f_forward`` with EDM-style              #
+        #   pre-conditioning (Karras et al. 2022): the network sees a scaled    #
+        #   input ``r_noisy``, predicts a coordinate residual, and we combine    #
+        #   it with a skip from the noisy coordinates to get ``x_denoised``.    #
+        #                                                                        #
+        #   Step 1 — Pre-scale the noisy input by                                #
+        #     ``c_in = 1 / sqrt(sigma_data^2 + sigma^2)`` so the network sees   #
+        #     unit-variance coordinates regardless of noise level. Broadcast    #
+        #     the per-sample noise level to the trailing (N_atom, 3) dims:      #
+        #       r_noisy = (                                                      #
+        #           x_noisy                                                      #
+        #           / torch.sqrt(self.sigma_data**2 + t_hat_noise_level**2)      #
+        #               [..., None, None]                                        #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 2 — Run the underlying network. ``f_forward`` is the actual    #
+        #     AF3 backbone for diffusion: AtomAttentionEncoder ->                #
+        #     DiffusionTransformer (Algorithm 23) -> AtomAttentionDecoder. It   #
+        #     returns the raw per-atom coordinate update ``r_update`` in the    #
+        #     scaled coordinate frame:                                          #
+        #       r_update = self.f_forward(                                       #
+        #           r_noisy             = r_noisy,                              #
+        #           t_hat_noise_level   = t_hat_noise_level,                    #
+        #           input_feature_dict  = input_feature_dict,                   #
+        #           s_inputs            = s_inputs,                             #
+        #           s_trunk             = s_trunk,                              #
+        #           z_trunk             = z_trunk,                              #
+        #           pair_z              = pair_z,                               #
+        #           p_lm                = p_lm,                                 #
+        #           c_l                 = c_l,                                  #
+        #           inplace_safe        = inplace_safe,                         #
+        #           chunk_size          = chunk_size,                           #
+        #           use_conditioning    = use_conditioning,                     #
+        #           enable_efficient_fusion = enable_efficient_fusion,          #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 3 — Recombine with EDM skip / output scales. Let               #
+        #       sigma   = t_hat_noise_level                                     #
+        #       s_ratio = sigma / sigma_data                                    #
+        #       c_skip  = 1 / (1 + s_ratio**2)                                  #
+        #       c_out   = sigma / torch.sqrt(1 + s_ratio**2)                    #
+        #     (Broadcast each scalar over (N_atom, 3) by ``[..., None, None]``.)#
+        #     Then:                                                              #
+        #       x_denoised = c_skip * x_noisy + c_out * r_update                #
+        #   Return ``x_denoised`` (same shape as ``x_noisy``,                   #
+        #   [..., N_sample, N_atom, 3]).                                         #
+        #                                                                        #
+        # TODO: 算法 20 —— DiffusionModule (EDM 单步去噪)。                       #
+        #   把底层网络 ``self.f_forward`` 包成 EDM 风格 (Karras 2022) 预条件:     #
+        #   网络看到缩放后的 ``r_noisy``，输出坐标残差，                            #
+        #   外面再按噪声水平把残差与原噪声坐标线性组合得到 ``x_denoised``。       #
+        #                                                                        #
+        #   步骤 1 — 用 ``c_in = 1 / sqrt(sigma_data^2 + sigma^2)`` 缩放          #
+        #     ``x_noisy``，使网络输入接近单位方差。按 (N_atom, 3) 广播每个样本    #
+        #     的噪声水平:                                                          #
+        #       r_noisy = (                                                      #
+        #           x_noisy                                                      #
+        #           / torch.sqrt(self.sigma_data**2 + t_hat_noise_level**2)      #
+        #               [..., None, None]                                        #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 2 — 跑底层网络。``f_forward`` 即 AF3 扩散主体:                    #
+        #     AtomAttentionEncoder -> DiffusionTransformer (算法 23) ->          #
+        #     AtomAttentionDecoder。返回缩放坐标系下的每原子坐标残差 ``r_update``: #
+        #       r_update = self.f_forward(                                       #
+        #           r_noisy             = r_noisy,                              #
+        #           t_hat_noise_level   = t_hat_noise_level,                    #
+        #           input_feature_dict  = input_feature_dict,                   #
+        #           s_inputs            = s_inputs,                             #
+        #           s_trunk             = s_trunk,                              #
+        #           z_trunk             = z_trunk,                              #
+        #           pair_z              = pair_z,                               #
+        #           p_lm                = p_lm,                                 #
+        #           c_l                 = c_l,                                  #
+        #           inplace_safe        = inplace_safe,                         #
+        #           chunk_size          = chunk_size,                           #
+        #           use_conditioning    = use_conditioning,                     #
+        #           enable_efficient_fusion = enable_efficient_fusion,          #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 3 — 用 EDM skip / output 缩放合成最终去噪坐标:                    #
+        #       sigma   = t_hat_noise_level                                     #
+        #       s_ratio = sigma / sigma_data                                    #
+        #       c_skip  = 1 / (1 + s_ratio**2)                                  #
+        #       c_out   = sigma / torch.sqrt(1 + s_ratio**2)                    #
+        #     (用 ``[..., None, None]`` 广播到 (N_atom, 3) 维。)                  #
+        #       x_denoised = c_skip * x_noisy + c_out * r_update                #
+        #   返回 ``x_denoised`` (形状同 ``x_noisy``,                              #
+        #   [..., N_sample, N_atom, 3])。                                         #
         ##########################################################################
 
         r_noisy = (

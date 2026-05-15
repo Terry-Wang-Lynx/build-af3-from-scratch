@@ -171,24 +171,123 @@ class Protenix(nn.Module):
             - z:       [..., N_token, N_token, c_z] pair after Pairformer
         """
         ##########################################################################
-        # TODO: Algorithm 1 lines 1-13.                                          #
-        #   1. ``InputFeatureEmbedder`` → s_inputs.                              #
-        #   2. Optionally fold a ConstraintEmbedder output into z_init.          #
-        #   3. Build z_init = outer-projection(s_init) + RelativePE +            #
-        #      LinearNoBias(token_bonds) [+ z_constraint].                       #
-        #   4. Recycle for ``N_cycle`` rounds:                                   #
-        #        z = z_init + linear_no_bias_z_cycle(layernorm_z_cycle(z))       #
-        #        z += template_embedder(...) if any                              #
-        #        z = msa_module(...)                                             #
-        #        s = s_init + linear_no_bias_s(layernorm_s(s))                   #
-        #        s, z = pairformer_stack(s, z, pair_mask=None)                   #
-        # TODO: Algorithm 1 第 1-13 行。                                         #
-        #   1. ``InputFeatureEmbedder`` 得 s_inputs。                             #
-        #   2. 若有 constraint 特征，叠加 ConstraintEmbedder。                    #
-        #   3. z_init = s 的两路外向投影 + RelativePE + token_bonds 投影 +       #
-        #      可选 z_constraint。                                                #
-        #   4. 循环 ``N_cycle`` 轮 recycling，依次跑                              #
-        #      MSAModule / TemplateEmbedder / PairformerStack。                  #
+        # TODO: Algorithm 1 lines 1-13 — trunk forward (input embed + recycle). #
+        #                                                                        #
+        #   Step 1 — Build the raw per-token single embedding from the input    #
+        #     features. ``InputFeatureEmbedder`` runs AtomAttentionEncoder      #
+        #     (no coordinates) and concatenates restype / profile /             #
+        #     deletion_mean to width ``c_s_inputs``:                             #
+        #       s_inputs = self.input_embedder(input_feature_dict,              #
+        #                                     inplace_safe=False)               #
+        #                                                                        #
+        #   Step 2 — Optionally embed user-supplied pair constraints. The       #
+        #     constraint embedder produces a [..., N_tok, N_tok, c_z] tensor    #
+        #     that is folded into ``z_init`` below:                              #
+        #       z_constraint = None                                              #
+        #       if "constraint_feature" in input_feature_dict:                   #
+        #           z_constraint = self.constraint_embedder(                    #
+        #               input_feature_dict["constraint_feature"])               #
+        #                                                                        #
+        #   Step 3 — Project s_inputs to ``c_s`` once and call that ``s_init``;  #
+        #     ``s_init`` feeds both the recycled single track and the outer-    #
+        #     product pair initialization:                                       #
+        #       s_init = self.linear_no_bias_sinit(s_inputs)                    #
+        #                                                                        #
+        #   Step 4 — Build the initial pair representation by adding three       #
+        #     contributions (broadcast a token-axis projection over the          #
+        #     opposite axis to get an outer-sum):                                #
+        #       z_init = (                                                       #
+        #           self.linear_no_bias_zinit1(s_init)[..., None, :]            #
+        #           + self.linear_no_bias_zinit2(s_init)[..., None, :, :]       #
+        #       )                                                                #
+        #       z_init = z_init + self.relative_position_encoding(              #
+        #           input_feature_dict["relp"])                                 #
+        #       z_init = z_init + self.linear_no_bias_token_bond(               #
+        #           input_feature_dict["token_bonds"].unsqueeze(-1))            #
+        #       if z_constraint is not None:                                    #
+        #           z_init = z_init + z_constraint                              #
+        #                                                                        #
+        #   Step 5 — Initialize the recycled buffers as zeros (recycling keeps  #
+        #     the same shape across rounds so we can preallocate from           #
+        #     ``z_init`` / ``s_init``):                                          #
+        #       z = torch.zeros_like(z_init)                                    #
+        #       s = torch.zeros_like(s_init)                                    #
+        #                                                                        #
+        #   Step 6 — Recycle ``N_cycle`` rounds (Algorithm 1 lines 9-13). Each  #
+        #     round does:                                                        #
+        #       (a) Fold the previous-round pair output back into the trunk     #
+        #           through ``layernorm_z_cycle`` + ``linear_no_bias_z_cycle``  #
+        #           and add it to ``z_init``:                                    #
+        #             z = z_init + self.linear_no_bias_z_cycle(                 #
+        #                              self.layernorm_z_cycle(z))              #
+        #       (b) Add the template embedding when templates are configured:   #
+        #             if self.template_embedder.n_blocks > 0:                   #
+        #                 z = z + self.template_embedder(                       #
+        #                     input_feature_dict, z)                            #
+        #       (c) Run the MSAModule, which updates z in place and discards    #
+        #           the MSA tensor after the last sub-block:                    #
+        #             z = self.msa_module(                                      #
+        #                 input_feature_dict, z, s_inputs, pair_mask=None)      #
+        #       (d) Update the single track from the previous round:            #
+        #             s = s_init + self.linear_no_bias_s(self.layernorm_s(s))   #
+        #       (e) Run the PairformerStack (Algorithm 17) on the joint         #
+        #           (s, z); it returns the same shapes:                         #
+        #             s, z = self.pairformer_stack(s, z, pair_mask=None)        #
+        #                                                                        #
+        #   Return ``(s_inputs, s, z)``.                                         #
+        #                                                                        #
+        # TODO: 算法 1 第 1-13 行 —— 主干前向 (输入嵌入 + 循环)。                  #
+        #                                                                        #
+        #   步骤 1 — 由输入特征构造原始 per-token single 嵌入。``InputFeatureEmbedder``#
+        #     跑 AtomAttentionEncoder (无坐标) 并拼接 restype / profile /          #
+        #     deletion_mean 到宽度 ``c_s_inputs``:                                #
+        #       s_inputs = self.input_embedder(input_feature_dict,              #
+        #                                     inplace_safe=False)               #
+        #                                                                        #
+        #   步骤 2 — 若提供 pair 约束，则嵌入；结果在下方加进 ``z_init``:           #
+        #       z_constraint = None                                              #
+        #       if "constraint_feature" in input_feature_dict:                   #
+        #           z_constraint = self.constraint_embedder(                    #
+        #               input_feature_dict["constraint_feature"])               #
+        #                                                                        #
+        #   步骤 3 — 把 s_inputs 投到 ``c_s`` 得 ``s_init``；它同时供               #
+        #     recycle 后的 single 通道与 pair 外加初始化使用:                       #
+        #       s_init = self.linear_no_bias_sinit(s_inputs)                    #
+        #                                                                        #
+        #   步骤 4 — 由三部分构造初始 pair 表示 (用 None 维做外加广播):              #
+        #       z_init = (                                                       #
+        #           self.linear_no_bias_zinit1(s_init)[..., None, :]            #
+        #           + self.linear_no_bias_zinit2(s_init)[..., None, :, :]       #
+        #       )                                                                #
+        #       z_init = z_init + self.relative_position_encoding(              #
+        #           input_feature_dict["relp"])                                 #
+        #       z_init = z_init + self.linear_no_bias_token_bond(               #
+        #           input_feature_dict["token_bonds"].unsqueeze(-1))            #
+        #       if z_constraint is not None:                                    #
+        #           z_init = z_init + z_constraint                              #
+        #                                                                        #
+        #   步骤 5 — recycling 缓冲清零 (跨 round 形状不变，可由                    #
+        #     ``z_init`` / ``s_init`` 预分配):                                    #
+        #       z = torch.zeros_like(z_init)                                    #
+        #       s = torch.zeros_like(s_init)                                    #
+        #                                                                        #
+        #   步骤 6 — 跑 ``N_cycle`` 轮 recycling (算法 1 第 9-13 行)。每轮:        #
+        #       (a) 把上一轮的 pair 输出经 LN + Linear 折回主干:                   #
+        #             z = z_init + self.linear_no_bias_z_cycle(                 #
+        #                              self.layernorm_z_cycle(z))              #
+        #       (b) 若配置了模板，叠加模板嵌入:                                     #
+        #             if self.template_embedder.n_blocks > 0:                   #
+        #                 z = z + self.template_embedder(                       #
+        #                     input_feature_dict, z)                            #
+        #       (c) 跑 MSAModule，原地更新 ``z`` (最后一块会丢掉 MSA 张量):         #
+        #             z = self.msa_module(                                      #
+        #                 input_feature_dict, z, s_inputs, pair_mask=None)      #
+        #       (d) 更新 single 通道:                                              #
+        #             s = s_init + self.linear_no_bias_s(self.layernorm_s(s))   #
+        #       (e) 跑 PairformerStack (算法 17):                                  #
+        #             s, z = self.pairformer_stack(s, z, pair_mask=None)        #
+        #                                                                        #
+        #   返回 ``(s_inputs, s, z)``。                                           #
         ##########################################################################
 
         s_inputs = self.input_embedder(input_feature_dict, inplace_safe=False)

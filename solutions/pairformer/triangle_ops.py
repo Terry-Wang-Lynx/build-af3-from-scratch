@@ -504,17 +504,82 @@ class OuterProductMean(nn.Module):
             [*, N_res, N_res, C_z] pair-embedding update.
         """
         ##########################################################################
-        # TODO: OuterProductMean — communicate MSA info into the pair channel.   #
-        #   1. LayerNorm m -> ln, mask it via linear_1(ln) and linear_2(ln).     #
-        #   2. Transpose so that the N_seq dim is contracted: a/b ->            #
-        #      [*, N_res, N_seq, C].                                             #
-        #   3. Outer product over C: outer = einsum('...bac,...dae->...bdce').  #
-        #   4. Normalize by mask^2 sum + eps.                                    #
-        # TODO: OuterProductMean —— 把 MSA 信息汇入 pair 通道。                 #
-        #   1. LayerNorm m -> ln，linear_1/linear_2 投影并按 mask 掩。           #
-        #   2. 把 N_seq 维转到内层: a/b 形状变成 [*, N_res, N_seq, C]。          #
-        #   3. 沿 C 做外积: outer = einsum('...bac,...dae->...bdce')。           #
-        #   4. 用 mask 内积 + eps 做归一化。                                     #
+        # TODO: Algorithm 10 — OuterProductMean. Communicates MSA-derived       #
+        #   per-position features into the pair channel by averaging an outer    #
+        #   product over the MSA dimension.                                     #
+        #                                                                        #
+        #   Step 1 — Default the MSA mask to ones over [*, N_seq, N_res]:        #
+        #       if mask is None:                                                 #
+        #           mask = m.new_ones(m.shape[:-1])                              #
+        #                                                                        #
+        #   Step 2 — Pre-LayerNorm over the channel dim of the MSA tensor:       #
+        #       ln = self.layer_norm(m)                  # [*, N_seq, N_res, c_m]#
+        #                                                                        #
+        #   Step 3 — Two linear projections to ``c_hidden``, each gated by the   #
+        #     MSA mask so masked sequences contribute zero:                      #
+        #       mask = mask.unsqueeze(-1)                # [*, N_seq, N_res, 1]  #
+        #       a = self.linear_1(ln) * mask             # [*, N_seq, N_res, c]  #
+        #       b = self.linear_2(ln) * mask             # [*, N_seq, N_res, c]  #
+        #       del ln                                                            #
+        #     ``linear_1`` / ``linear_2`` are OpenfoldLinear(c_m -> c_hidden,    #
+        #     bias=False); ``linear_out`` projects c_hidden**2 -> c_z (init="final"). #
+        #                                                                        #
+        #   Step 4 — Swap N_seq and N_res so the contraction axis sits inside    #
+        #     the outer product:                                                 #
+        #       a = a.transpose(-2, -3)                  # [*, N_res, N_seq, c]  #
+        #       b = b.transpose(-2, -3)                  # [*, N_res, N_seq, c]  #
+        #                                                                        #
+        #   Step 5 — Outer product across the two residue axes, mean over the    #
+        #     MSA axis (the actual mean comes from dividing by the mask sum      #
+        #     in Step 6). ``_opm`` does the einsum, flattens the c×c block, and #
+        #     applies ``linear_out`` to project back to ``c_z``:                 #
+        #       outer = ( self._chunk(a, b, chunk_size) if chunk_size is not None #
+        #                 else self._opm(a, b) )         # [*, N_res, N_res, c_z]#
+        #     The einsum inside ``_opm`` is                                      #
+        #       'bac,dae->bdce'  i.e. outer_ijcd = sum_s a_isc · b_jsd           #
+        #                                                                        #
+        #   Step 6 — Normalize by the (per-pair) number of unmasked sequences,   #
+        #     with ``self.eps`` for numerical safety:                            #
+        #       norm  = torch.einsum('...abc,...adc->...bdc', mask, mask)        #
+        #                + self.eps                       # [*, N_res, N_res, 1] #
+        #       outer = outer / norm   (or /= when inplace_safe)                 #
+        #   Return ``outer``.                                                    #
+        #                                                                        #
+        # TODO: 算法 10 —— OuterProductMean。                                    #
+        #   通过沿 MSA 维做外积取均值，把 MSA 中的每位点信息汇入 pair 通道。      #
+        #                                                                        #
+        #   步骤 1 — mask 默认为全 1 (形状 [*, N_seq, N_res]):                    #
+        #       if mask is None:                                                 #
+        #           mask = m.new_ones(m.shape[:-1])                              #
+        #                                                                        #
+        #   步骤 2 — 通道维上的 Pre-LayerNorm:                                     #
+        #       ln = self.layer_norm(m)                  # [*, N_seq, N_res, c_m]#
+        #                                                                        #
+        #   步骤 3 — 两路线性投影到 ``c_hidden``，并用 MSA mask 屏蔽:               #
+        #       mask = mask.unsqueeze(-1)                # [*, N_seq, N_res, 1]  #
+        #       a = self.linear_1(ln) * mask             # [*, N_seq, N_res, c]  #
+        #       b = self.linear_2(ln) * mask             # [*, N_seq, N_res, c]  #
+        #       del ln                                                            #
+        #     ``linear_1`` / ``linear_2`` 为                                       #
+        #     OpenfoldLinear(c_m -> c_hidden, bias=False);                        #
+        #     ``linear_out`` 把 c_hidden**2 投回 c_z (init="final")。              #
+        #                                                                        #
+        #   步骤 4 — 交换 N_seq 与 N_res，把 MSA 维移到内侧便于做外积:               #
+        #       a = a.transpose(-2, -3)                  # [*, N_res, N_seq, c]  #
+        #       b = b.transpose(-2, -3)                  # [*, N_res, N_seq, c]  #
+        #                                                                        #
+        #   步骤 5 — 沿两条 residue 轴做外积，再沿 MSA 轴求和；                     #
+        #     ``_opm`` 内部完成 einsum、展平 c×c、并经 ``linear_out`` 投回 c_z:    #
+        #       outer = ( self._chunk(a, b, chunk_size) if chunk_size is not None #
+        #                 else self._opm(a, b) )         # [*, N_res, N_res, c_z]#
+        #     其中 einsum 形式:                                                    #
+        #       'bac,dae->bdce'   即 outer_ijcd = sum_s a_isc · b_jsd            #
+        #                                                                        #
+        #   步骤 6 — 用每个 pair 中未被掩码的序列数做归一化 (+eps):                  #
+        #       norm  = torch.einsum('...abc,...adc->...bdc', mask, mask)        #
+        #                + self.eps                       # [*, N_res, N_res, 1] #
+        #       outer = outer / norm     (inplace_safe 时用 /=)                   #
+        #   返回 ``outer``。                                                       #
         ##########################################################################
 
         if mask is None:

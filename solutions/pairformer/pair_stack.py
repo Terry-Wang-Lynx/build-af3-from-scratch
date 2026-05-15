@@ -131,17 +131,77 @@ class PairformerBlock(nn.Module):
             ``None`` if this block has no single-track (``c_s == 0``).
         """
         ##########################################################################
-        # TODO: Algorithm 17 lines 2-8. Update z with four sub-blocks, then     #
-        #   (iff c_s > 0) update s with one AttentionPairBias + Transition.      #
-        #     1. z += TriangleMultiplicationOutgoing(z)                          #
-        #     2. z += TriangleMultiplicationIncoming(z)                          #
-        #     3. z += TriangleAttentionStartingNode(z)                           #
-        #     4. z += TriangleAttentionEndingNode(z) (transposed twice)          #
-        #     5. z += pair_transition(z)                                         #
-        #     6. (c_s>0) s += AttentionPairBias(s, z)                            #
-        #     7. (c_s>0) s += single_transition(s)                               #
-        # TODO: Algorithm 17 第 2-8 行。先用四步更新 z，再 (c_s>0 时) 用一次     #
-        #   AttentionPairBias + Transition 更新 s。                              #
+        # TODO: Algorithm 17 lines 2-8 — one Pairformer block.                   #
+        #                                                                        #
+        #   Phase A — Pair update (5 residual sub-blocks):                       #
+        #     1. Outgoing triangle multiplication (Alg 12). Use the inplace-safe #
+        #        add path so the residual is fused into the sub-block:           #
+        #          z = self.tri_mul_out(z, mask=pair_mask,                      #
+        #                               inplace_safe=True,                       #
+        #                               _add_with_inplace=True)                  #
+        #     2. Incoming triangle multiplication (Alg 13), same form:           #
+        #          z = self.tri_mul_in(z, mask=pair_mask,                       #
+        #                              inplace_safe=True,                        #
+        #                              _add_with_inplace=True)                   #
+        #     3. Triangle self-attention around the starting node (Alg 13). The #
+        #        sub-block does NOT add the residual itself, do it manually:    #
+        #          z += self.tri_att_start(z, mask=pair_mask, inplace_safe=True)#
+        #     4. Triangle self-attention around the ending node (Alg 14). Same  #
+        #        module as Alg 13 but applied to the transposed z, so we        #
+        #        physically transpose:                                          #
+        #          z = z.transpose(-2, -3).contiguous()                          #
+        #          z += self.tri_att_end(                                       #
+        #                  z,                                                    #
+        #                  mask=(pair_mask.transpose(-1, -2)                    #
+        #                        if pair_mask is not None else None),           #
+        #                  inplace_safe=True)                                    #
+        #          z = z.transpose(-2, -3).contiguous()                          #
+        #     5. Pair transition (Alg 11):                                       #
+        #          z += self.pair_transition(z)                                 #
+        #                                                                        #
+        #   Phase B — Single update (only when ``self.c_s > 0``):                #
+        #     6. AttentionPairBias driven by ``z``. The block has ``has_s=False`` #
+        #        (no AdaLN modulation), so pass ``s=None``:                      #
+        #          s = s + self.attention_pair_bias(a=s, s=None, z=z)           #
+        #     7. Single transition (Alg 11 applied to ``s``):                    #
+        #          s = s + self.single_transition(s)                            #
+        #                                                                        #
+        #   Returning: ``(s, z)``. When ``c_s == 0``, ``s`` passes through       #
+        #   unchanged (``None``).                                                #
+        #                                                                        #
+        # TODO: 算法 17 第 2-8 行 —— 一个 Pairformer block。                      #
+        #                                                                        #
+        #   阶段 A —— pair 更新 (5 个残差子块):                                    #
+        #     1. 外向三角乘 (算法 12)，用 inplace-safe 加和路径把残差融合进子块:  #
+        #          z = self.tri_mul_out(z, mask=pair_mask,                      #
+        #                               inplace_safe=True,                       #
+        #                               _add_with_inplace=True)                  #
+        #     2. 内向三角乘 (算法 13)，同上:                                       #
+        #          z = self.tri_mul_in(z, mask=pair_mask,                       #
+        #                              inplace_safe=True,                        #
+        #                              _add_with_inplace=True)                   #
+        #     3. 起始节点三角自注意力 (算法 13)。子块内不做残差，外面手动加:       #
+        #          z += self.tri_att_start(z, mask=pair_mask, inplace_safe=True)#
+        #     4. 终止节点三角自注意力 (算法 14)。与算法 13 共用模块，但作用在    #
+        #        z 的转置上，于是显式做物理转置:                                  #
+        #          z = z.transpose(-2, -3).contiguous()                          #
+        #          z += self.tri_att_end(                                       #
+        #                  z,                                                    #
+        #                  mask=(pair_mask.transpose(-1, -2)                    #
+        #                        if pair_mask is not None else None),           #
+        #                  inplace_safe=True)                                    #
+        #          z = z.transpose(-2, -3).contiguous()                          #
+        #     5. Pair transition (算法 11):                                       #
+        #          z += self.pair_transition(z)                                 #
+        #                                                                        #
+        #   阶段 B —— single 更新 (仅 ``self.c_s > 0`` 时):                       #
+        #     6. 由 ``z`` 作 bias 的 AttentionPairBias。该 block 的                #
+        #        ``has_s=False``（不做 AdaLN），所以 ``s`` 入参传 None:            #
+        #          s = s + self.attention_pair_bias(a=s, s=None, z=z)           #
+        #     7. Single transition (算法 11 作用在 ``s`` 上):                      #
+        #          s = s + self.single_transition(s)                            #
+        #                                                                        #
+        #   返回 ``(s, z)``。``c_s == 0`` 时 ``s`` 原样透传 (``None``)。           #
         ##########################################################################
 
         z = self.tri_mul_out(z, mask=pair_mask, inplace_safe=True, _add_with_inplace=True)

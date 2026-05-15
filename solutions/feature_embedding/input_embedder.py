@@ -81,17 +81,93 @@ class InputFeatureEmbedder(nn.Module):
         """
         del inplace_safe
         ##########################################################################
-        # TODO: Algorithm 2. Build the per-token single representation.          #
-        #   1. Run AtomAttentionEncoder on the per-atom features (without coords)#
-        #      to get a [..., N_token, c_token] token-level activation ``a``.    #
-        #   2. Concatenate ``a`` with per-token features (restype / profile /    #
-        #      deletion_mean) along the channel dim.                             #
-        #   3. If ESM features are enabled, add the projected ESM embedding.    #
-        # TODO: Algorithm 2。生成每 token 的 single 表示。                       #
-        #   1. 跑 AtomAttentionEncoder (不带坐标) 得到 token 级激活 a。          #
-        #   2. 把 a 和每 token 特征 (restype / profile / deletion_mean) 沿通道  #
-        #      维拼起来。                                                        #
-        #   3. 若启用了 ESM，加上投影后的 ESM embedding。                       #
+        # TODO: Algorithm 2 — InputFeatureEmbedder. Build the per-token single   #
+        #   representation ``s_inputs`` that the trunk consumes. The output      #
+        #   width is ``c_token + 32 + 32 + 1 = 449``                             #
+        #   (= aggregated AtomAttentionEncoder output + restype + profile +      #
+        #    deletion_mean).                                                     #
+        #                                                                        #
+        #   Step 1 — Run the atom-level encoder with ``has_coords=False`` (set   #
+        #     in ``__init__``), aggregating atom features up to tokens. Each    #
+        #     positional argument corresponds to one entry in the AF3 feature   #
+        #     dict; the encoder returns ``(a, q, c, p)`` but we only want the   #
+        #     token activation ``a`` of shape [..., N_token, c_token]:           #
+        #       a, _, _, _ = self.atom_attention_encoder(                       #
+        #           input_feature_dict["atom_to_token_idx"],                    #
+        #           input_feature_dict["ref_pos"],                              #
+        #           input_feature_dict["ref_charge"],                           #
+        #           input_feature_dict["ref_mask"],                             #
+        #           input_feature_dict["ref_atom_name_chars"],                  #
+        #           input_feature_dict["ref_element"],                          #
+        #           input_feature_dict["d_lm"],                                 #
+        #           input_feature_dict["v_lm"],                                 #
+        #           input_feature_dict["pad_info"],                             #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 2 — Concatenate ``a`` with each per-token feature, reshaping    #
+        #     to the common token batch shape so the cat aligns cleanly:        #
+        #       batch_shape = input_feature_dict["restype"].shape[:-1]           #
+        #       s_inputs = torch.cat(                                            #
+        #           [a]                                                          #
+        #           + [ input_feature_dict[name].reshape(*batch_shape, d)        #
+        #               for name, d in self.input_feature.items() ],            #
+        #           dim=-1,                                                      #
+        #       )                                                                #
+        #     ``self.input_feature`` is ordered exactly                          #
+        #     ``{"restype": 32, "profile": 32, "deletion_mean": 1}`` — keep      #
+        #     this order to match the checkpoint.                                #
+        #                                                                        #
+        #   Step 3 — Optional ESM bypass. When ``esm_configs["enable"]`` is       #
+        #     True a separate zero-initialized projection of the precomputed     #
+        #     ESM embedding is added back to the same channel layout:            #
+        #       if self.esm_configs["enable"]:                                   #
+        #           esm_emb = self.linear_esm(                                   #
+        #               input_feature_dict["esm_token_embedding"])              #
+        #           s_inputs = s_inputs + esm_emb                                #
+        #   Return ``s_inputs``.                                                 #
+        #                                                                        #
+        # TODO: 算法 2 —— InputFeatureEmbedder。                                  #
+        #   生成主干使用的每 token 单序列表示 ``s_inputs``。                       #
+        #   输出宽度 ``c_token + 32 + 32 + 1 = 449``                              #
+        #   (= AtomAttentionEncoder 聚合的 token 激活 + restype + profile +       #
+        #    deletion_mean)。                                                    #
+        #                                                                        #
+        #   步骤 1 — ``has_coords=False`` 跑 AtomAttentionEncoder (__init__        #
+        #     中已配)。每个位置参数对应 AF3 特征字典中的一项；编码器返回           #
+        #     ``(a, q, c, p)``，这里只需 token 激活 ``a``，形状                    #
+        #     [..., N_token, c_token]:                                            #
+        #       a, _, _, _ = self.atom_attention_encoder(                       #
+        #           input_feature_dict["atom_to_token_idx"],                    #
+        #           input_feature_dict["ref_pos"],                              #
+        #           input_feature_dict["ref_charge"],                           #
+        #           input_feature_dict["ref_mask"],                             #
+        #           input_feature_dict["ref_atom_name_chars"],                  #
+        #           input_feature_dict["ref_element"],                          #
+        #           input_feature_dict["d_lm"],                                 #
+        #           input_feature_dict["v_lm"],                                 #
+        #           input_feature_dict["pad_info"],                             #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 2 — 把 ``a`` 与每 token 特征沿通道维拼接，先 reshape 到统一的       #
+        #     token batch 形状:                                                  #
+        #       batch_shape = input_feature_dict["restype"].shape[:-1]           #
+        #       s_inputs = torch.cat(                                            #
+        #           [a]                                                          #
+        #           + [ input_feature_dict[name].reshape(*batch_shape, d)        #
+        #               for name, d in self.input_feature.items() ],            #
+        #           dim=-1,                                                      #
+        #       )                                                                #
+        #     ``self.input_feature`` 的顺序必须保持                                #
+        #     ``{"restype": 32, "profile": 32, "deletion_mean": 1}`` —— 与权重    #
+        #     一致。                                                              #
+        #                                                                        #
+        #   步骤 3 — ESM 旁路 (可选)。``esm_configs["enable"]`` 为 True 时，       #
+        #     用零初始化的 ``linear_esm`` 投影预算好的 ESM 嵌入并叠加:             #
+        #       if self.esm_configs["enable"]:                                   #
+        #           esm_emb = self.linear_esm(                                   #
+        #               input_feature_dict["esm_token_embedding"])              #
+        #           s_inputs = s_inputs + esm_emb                                #
+        #   返回 ``s_inputs``。                                                   #
         ##########################################################################
 
         a, _, _, _ = self.atom_attention_encoder(

@@ -60,10 +60,41 @@ class AdaptiveLayerNorm(nn.Module):
             [..., N_token, c_a] — AdaLN-modulated ``a``.
         """
         ##########################################################################
-        # TODO: Apply LayerNorm to ``a`` and ``s``, then modulate ``a`` with     #
-        #   ``sigmoid(linear_s(s)) * a + linear_nobias_s(s)``.                   #
-        # TODO: 对 ``a`` 和 ``s`` 分别 LayerNorm，然后用                        #
-        #   ``sigmoid(linear_s(s)) * a + linear_nobias_s(s)`` 调制 ``a``。      #
+        # TODO: Algorithm 26 — Adaptive LayerNorm (AdaLN), as used inside the    #
+        #   AF3 DiffusionTransformer to inject the single embedding ``s`` into   #
+        #   the token/atom stream ``a``.                                         #
+        #                                                                        #
+        #   Step 1 — Normalize both inputs independently:                        #
+        #       a = self.layernorm_a(a)   # no scale, no offset                  #
+        #       s = self.layernorm_s(s)   # learnable scale, no offset           #
+        #     (See __init__: ``layernorm_a`` has create_scale=False,             #
+        #      create_offset=False, while ``layernorm_s`` keeps its scale.)      #
+        #                                                                        #
+        #   Step 2 — Compute the conditioning scale and bias from ``s`` and      #
+        #     apply them to ``a`` (FiLM / AdaLN-Zero modulation):                #
+        #       a = sigmoid(self.linear_s(s)) * a + self.linear_nobias_s(s)      #
+        #     -  ``linear_s``        is Linear      (c_s -> c_a, zero-init)      #
+        #     -  ``linear_nobias_s`` is LinearNoBias(c_s -> c_a, zero-init)      #
+        #     Zero-initialization makes the layer start as identity:             #
+        #       sigmoid(0)=0.5 -> a := 0.5 * a + 0   (handled by the downstream  #
+        #       block that consumes this output).                                #
+        #                                                                        #
+        # TODO: 算法 26 — Adaptive LayerNorm (AdaLN)，                            #
+        #   AF3 DiffusionTransformer 用它把单序列嵌入 ``s`` 注入                  #
+        #   token / atom 流 ``a``。                                              #
+        #                                                                        #
+        #   步骤 1 — 分别对两路输入做 LayerNorm:                                  #
+        #       a = self.layernorm_a(a)   # 无 scale、无 offset                  #
+        #       s = self.layernorm_s(s)   # 有可学 scale、无 offset              #
+        #     (见 __init__: ``layernorm_a`` 的 create_scale=False、              #
+        #      create_offset=False；``layernorm_s`` 保留 scale。)                #
+        #                                                                        #
+        #   步骤 2 — 由 ``s`` 算出 scale / bias，按 FiLM / AdaLN-Zero 调制 ``a``: #
+        #       a = sigmoid(self.linear_s(s)) * a + self.linear_nobias_s(s)      #
+        #     -  ``linear_s``        是 Linear      (c_s -> c_a，zero-init)      #
+        #     -  ``linear_nobias_s`` 是 LinearNoBias(c_s -> c_a，zero-init)      #
+        #     零初始化保证该层一开始近似恒等映射:                                 #
+        #       sigmoid(0)=0.5 -> a := 0.5 * a + 0 (由下游 block 进一步处理)。   #
         ##########################################################################
 
         a = self.layernorm_a(a)
@@ -109,10 +140,38 @@ class Transition(nn.Module):
             [..., c_in] — SwiGLU-style gated FFN output.
         """
         ##########################################################################
-        # TODO: Algorithm 11. Apply LayerNorm, project via two Linear branches    #
-        #   (a, b), gate as ``silu(a) * b``, then project back via linear_no_bias.#
-        # TODO: Algorithm 11。先 LayerNorm，分别经 linear_no_bias_a / b 投影得到 #
-        #   a 和 b，按 ``silu(a) * b`` 门控，最后用 linear_no_bias 投回原维度。 #
+        # TODO: Algorithm 11 — SwiGLU-style Transition block.                    #
+        #   This is AF3's per-token / per-pair MLP. It widens by a factor ``n``  #
+        #   (typically 2 or 4), then projects back.                              #
+        #                                                                        #
+        #   Step 1 — Pre-LayerNorm:                                              #
+        #       x = self.layernorm1(x)                  # [..., c_in]            #
+        #                                                                        #
+        #   Step 2 — Two parallel linear branches widen to ``n * c_in``:         #
+        #       a = self.linear_no_bias_a(x)            # [..., n * c_in]       #
+        #       b = self.linear_no_bias_b(x)            # [..., n * c_in]       #
+        #     (Both initialized with ``relu`` fan-in scaling; both no-bias.)     #
+        #                                                                        #
+        #   Step 3 — SwiGLU gate ``silu(a) * b`` and project back:               #
+        #       return self.linear_no_bias(F.silu(a) * b)   # [..., c_in]       #
+        #     (``linear_no_bias`` is zero-init so the residual branch starts    #
+        #      as a no-op.)                                                      #
+        #                                                                        #
+        # TODO: 算法 11 — SwiGLU 风格的 Transition 块。                           #
+        #   这是 AF3 中每 token / 每 pair 的 MLP，先按倍数 ``n`` 扩宽 (常用 2/4) #
+        #   再投回原维度。                                                       #
+        #                                                                        #
+        #   步骤 1 — Pre-LayerNorm:                                              #
+        #       x = self.layernorm1(x)                  # [..., c_in]            #
+        #                                                                        #
+        #   步骤 2 — 两条并行线性分支，均扩宽到 ``n * c_in``:                     #
+        #       a = self.linear_no_bias_a(x)            # [..., n * c_in]       #
+        #       b = self.linear_no_bias_b(x)            # [..., n * c_in]       #
+        #     (两者均用 relu fan-in 初始化、不带 bias。)                          #
+        #                                                                        #
+        #   步骤 3 — SwiGLU 门控 ``silu(a) * b`` 再投回原维度:                    #
+        #       return self.linear_no_bias(F.silu(a) * b)   # [..., c_in]       #
+        #     (``linear_no_bias`` 零初始化，使残差分支初始为恒等。)              #
         ##########################################################################
 
         x = self.layernorm1(x)

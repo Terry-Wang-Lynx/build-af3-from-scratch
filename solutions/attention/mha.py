@@ -158,17 +158,50 @@ class Attention(nn.Module):
         self.zero_init = zero_init
 
         ##########################################################################
-        # TODO: Initialize the query/key/value/output linear layers.             #
-        #   Query uses bias iff ``q_linear_bias`` is True (default for AF3).     #
-        #   Key/value/output use no bias. Output dim = c_hidden * num_heads.     #
-        #   If ``gating``, initialize ``linear_g`` (zero-init) and a sigmoid.    #
-        #   Names must be linear_q / linear_k / linear_v / linear_o / linear_g.  #
+        # TODO: Initialize the Q / K / V / output (and optional gate) linears.   #
+        #   Let ``out_h = c_hidden * num_heads`` (total per-token hidden width). #
         #                                                                        #
-        # TODO: 初始化 query / key / value / output 线性层。                     #
-        #   query 是否带 bias 由 ``q_linear_bias`` 决定 (AF3 默认带)。            #
-        #   key / value / output 均不带 bias，输出维度 = c_hidden * num_heads。  #
-        #   若 ``gating``，初始化 ``linear_g`` (zero-init) 和 sigmoid。           #
-        #   命名必须是 linear_q / linear_k / linear_v / linear_o / linear_g。    #
+        #   self.linear_q:                                                       #
+        #       Linear      (c_q -> out_h)   if ``q_linear_bias`` is True        #
+        #       LinearNoBias(c_q -> out_h)   otherwise                           #
+        #   self.linear_k = LinearNoBias(c_k    -> out_h)                        #
+        #   self.linear_v = LinearNoBias(c_v    -> out_h)                        #
+        #   self.linear_o = LinearNoBias(out_h  -> c_q)                          #
+        #                                                                        #
+        #   Gating branch (when ``gating`` is True, default for AF3):            #
+        #       self.linear_g = LinearNoBias(c_q -> out_h, initializer="zeros") #
+        #       self.sigmoid  = nn.Sigmoid()                                     #
+        #   Else: set ``self.linear_g = None`` (used to skip gating in forward). #
+        #                                                                        #
+        #   Zero-init branch (when ``zero_init`` is True): zero out              #
+        #       ``self.linear_o.weight`` so the attention block starts as a      #
+        #       no-op residual (AF3 standard init).                              #
+        #                                                                        #
+        #   The attribute names linear_q / linear_k / linear_v / linear_o /      #
+        #   linear_g are **load-bearing** — they must match the Protenix         #
+        #   checkpoint state_dict keys exactly.                                  #
+        #                                                                        #
+        # TODO: 初始化 Q / K / V / 输出(可选门控) 五个线性层。                   #
+        #   令 ``out_h = c_hidden * num_heads`` (每 token 的总隐藏宽度)。         #
+        #                                                                        #
+        #   self.linear_q:                                                       #
+        #       Linear      (c_q -> out_h)   若 ``q_linear_bias`` 为 True        #
+        #       LinearNoBias(c_q -> out_h)   否则                                #
+        #   self.linear_k = LinearNoBias(c_k    -> out_h)                        #
+        #   self.linear_v = LinearNoBias(c_v    -> out_h)                        #
+        #   self.linear_o = LinearNoBias(out_h  -> c_q)                          #
+        #                                                                        #
+        #   门控分支 (``gating`` 为 True，AF3 默认):                              #
+        #       self.linear_g = LinearNoBias(c_q -> out_h, initializer="zeros") #
+        #       self.sigmoid  = nn.Sigmoid()                                     #
+        #   否则: ``self.linear_g = None`` (用于在 forward 跳过门控)。           #
+        #                                                                        #
+        #   零初始化分支 (``zero_init`` 为 True): 将                              #
+        #       ``self.linear_o.weight`` 置零，使该 attention 块以                #
+        #       残差恒等开始 (AF3 标准初始化)。                                  #
+        #                                                                        #
+        #   linear_q / linear_k / linear_v / linear_o / linear_g 这五个属性名     #
+        #   是**关键约束** —— 必须与 Protenix 权重 state_dict 的 key 完全一致。 #
         ##########################################################################
 
         out_h = self.c_hidden * self.num_heads
@@ -286,24 +319,89 @@ class Attention(nn.Module):
         """
         ##########################################################################
         # TODO: Multi-head attention forward pass.                               #
-        #   - Project Q/K/V via ``self._prep_qkv`` (scales Q by 1/sqrt(c_hidden))#
-        #   - Add a head dimension to ``attn_bias`` / ``trunked_attn_bias``      #
-        #   - Local-attention branch (n_queries/n_keys set):                     #
-        #       * "global_attention_with_bias": build a local mask via          #
-        #          ``create_local_attn_bias`` and call ``_attention``           #
-        #       * "local_cross_attention": call ``_local_attention``             #
-        #   - Otherwise: call ``_attention``                                     #
-        #   - Transpose to [*, Q, H, C_hidden] and project out with ``_wrap_up`` #
+        #   Step 1 — Project Q/K/V from q_x / kv_x:                              #
+        #       q, k, v = self._prep_qkv(q_x=q_x, kv_x=kv_x, apply_scale=True)   #
+        #     This linearly projects, splits into heads, transposes              #
+        #     [*, T, H*C] -> [*, H, T, C], and scales q by 1/sqrt(c_hidden).     #
+        #                                                                        #
+        #   Step 2 — Broadcast bias to the head dim if necessary:                #
+        #       if attn_bias is not None and                                     #
+        #          len(attn_bias.shape) != len(q.shape):                         #
+        #           attn_bias = attn_bias.unsqueeze(dim=-3)                      #
+        #       Same with trunked_attn_bias (one extra trunk dim, so compare     #
+        #          against len(q.shape) + 1 and unsqueeze at dim=-4).            #
+        #                                                                        #
+        #   Step 3 — Branch on whether we run **local** or **full** attention:   #
+        #     if n_queries and n_keys:                                           #
+        #         if self.local_attention_method == "global_attention_with_bias":#
+        #             local_attn_bias = create_local_attn_bias(                  #
+        #                 q.shape[-2], n_queries, n_keys,                        #
+        #                 inf=inf, device=q.device,                              #
+        #             )  # [n_q_total, n_kv_total] with -inf outside the window  #
+        #             # broadcast to q's leading dims:                           #
+        #             local_attn_bias = local_attn_bias.reshape(                 #
+        #                 (1,) * len(q.shape[:-2]) + local_attn_bias.shape       #
+        #             )                                                          #
+        #             if attn_bias is not None:                                  #
+        #                 local_attn_bias = local_attn_bias + attn_bias          #
+        #             o = _attention(q, k, v, attn_bias=local_attn_bias,         #
+        #                            use_efficient_implementation=               #
+        #                                 self.use_efficient_implementation,     #
+        #                            inplace_safe=inplace_safe)                  #
+        #         elif self.local_attention_method == "local_cross_attention":   #
+        #             o = _local_attention(                                      #
+        #                 q=q, k=k, v=v,                                         #
+        #                 n_queries=n_queries, n_keys=n_keys,                    #
+        #                 attn_bias=attn_bias,                                   #
+        #                 trunked_attn_bias=trunked_attn_bias,                   #
+        #                 inf=inf,                                               #
+        #                 use_efficient_implementation=                          #
+        #                     self.use_efficient_implementation,                 #
+        #                 inplace_safe=inplace_safe,                             #
+        #                 chunk_size=chunk_size,                                 #
+        #             )                                                          #
+        #         else:                                                          #
+        #             raise ValueError(...)                                      #
+        #     else:                                                              #
+        #         o = _attention(q, k, v, attn_bias=attn_bias,                   #
+        #                        use_efficient_implementation=                   #
+        #                            self.use_efficient_implementation,          #
+        #                        inplace_safe=inplace_safe)                      #
+        #                                                                        #
+        #   Step 4 — Permute heads back and project out:                         #
+        #       o = o.transpose(-2, -3)            # [*, Q, H, C_hidden]         #
+        #       o = self._wrap_up(o, q_x)          # gate (if any) + linear_o    #
+        #   Return o ([*, Q, c_q]).                                              #
         #                                                                        #
         # TODO: 多头注意力前向。                                                 #
-        #   - 通过 ``self._prep_qkv`` 投影 Q/K/V (Q 已按 1/sqrt(c_hidden) 缩放)。#
-        #   - 给 ``attn_bias`` / ``trunked_attn_bias`` 加 head 维度。             #
-        #   - 若给了 n_queries / n_keys 则走局部分支:                            #
-        #       * "global_attention_with_bias": 用 ``create_local_attn_bias``    #
-        #          构造局部 mask，再调 ``_attention``。                         #
-        #       * "local_cross_attention": 调 ``_local_attention``。            #
-        #   - 否则: 直接 ``_attention``。                                        #
-        #   - 转置到 [*, Q, H, C_hidden] 后通过 ``_wrap_up`` 出输出。            #
+        #   步骤 1 — 投影 Q/K/V：                                                 #
+        #       q, k, v = self._prep_qkv(q_x=q_x, kv_x=kv_x, apply_scale=True)   #
+        #     该方法做线性投影、拆头、转置                                       #
+        #     [*, T, H*C] -> [*, H, T, C]，并将 q 缩放 1/sqrt(c_hidden)。         #
+        #                                                                        #
+        #   步骤 2 — 给 bias 广播 head 维度：                                     #
+        #       if attn_bias is not None and                                     #
+        #          len(attn_bias.shape) != len(q.shape):                         #
+        #           attn_bias = attn_bias.unsqueeze(dim=-3)                      #
+        #       trunked_attn_bias 多一个 trunk 维度，                             #
+        #         比较 len(q.shape) + 1，在 dim=-4 unsqueeze。                    #
+        #                                                                        #
+        #   步骤 3 — 在“局部”和“全局”注意力之间分支:                              #
+        #     if n_queries and n_keys:                                           #
+        #         若 self.local_attention_method == "global_attention_with_bias"#
+        #           调 create_local_attn_bias 生成窗口掩码（-inf 落在窗口外），   #
+        #           reshape 到 q 的 leading dims 后 (若有) 加上 attn_bias，      #
+        #           再调 _attention(q,k,v, attn_bias=local_attn_bias, ...)。    #
+        #         若 self.local_attention_method == "local_cross_attention"     #
+        #           调 _local_attention(q, k, v, n_queries, n_keys,             #
+        #             attn_bias, trunked_attn_bias, inf, ...)。                 #
+        #         其余值: raise ValueError。                                      #
+        #     else: 直接调 _attention(q, k, v, attn_bias=attn_bias, ...)。       #
+        #                                                                        #
+        #   步骤 4 — 把 head 维换回，再做输出投影:                                #
+        #       o = o.transpose(-2, -3)            # [*, Q, H, C_hidden]         #
+        #       o = self._wrap_up(o, q_x)          # 门控(可选) + linear_o       #
+        #   返回 o ([*, Q, c_q])。                                                #
         ##########################################################################
 
         q, k, v = self._prep_qkv(q_x=q_x, kv_x=kv_x, apply_scale=True)

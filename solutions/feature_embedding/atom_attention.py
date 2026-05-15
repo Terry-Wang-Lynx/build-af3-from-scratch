@@ -314,23 +314,146 @@ class AtomAttentionEncoder(nn.Module):
             p_lm: [..., (N_sample), n_blocks, n_queries, n_keys, c_atompair]
         """
         ##########################################################################
-        # TODO: Algorithm 5. AtomAttentionEncoder.                               #
-        #   1. Build time-invariant (c_l, p_lm) via ``prepare_cache`` if not     #
-        #      already given.                                                    #
-        #   2. If coords ``r_l`` are provided, add the trunk single broadcast     #
-        #      and the noisy-position projection to get the query ``q_l``.       #
-        #      Otherwise q_l = c_l.clone().                                      #
-        #   3. Fuse the single conditioning into the pair representation         #
-        #      ``p_lm`` via two ReLU-linear projections + a small MLP.           #
-        #   4. Run AtomTransformer (local cross-attention) on (q_l, c_l, p_lm). #
-        #   5. Aggregate atoms→tokens via mean-pool to produce ``a``.            #
-        # TODO: Algorithm 5. AtomAttentionEncoder。                              #
-        #   1. 通过 ``prepare_cache`` 算与时间无关的 (c_l, p_lm)。               #
-        #   2. 若给了坐标 r_l，把主干 single 广播 + 噪声坐标投影加到 c_l，       #
-        #      得到查询 q_l；否则 q_l = c_l.clone()。                            #
-        #   3. 用两路 ReLU+Linear + 小 MLP 把 single 条件融入 p_lm。            #
-        #   4. AtomTransformer 跑局部 cross-attention。                          #
-        #   5. mean-pool 原子→token 得到 a。                                     #
+        # TODO: Algorithm 5 — AtomAttentionEncoder. Aggregates per-atom features #
+        #   up to per-token features ``a`` while emitting the atom-level state   #
+        #   (q, c, p) that the AtomAttentionDecoder later consumes as a skip.    #
+        #                                                                        #
+        #   Step 0 — Sanity-check inputs in the “with coords” branch (Diffusion  #
+        #     loop): r_l / s / z must all be available:                          #
+        #       if self.has_coords:                                               #
+        #           assert r_l is not None and s is not None and z is not None   #
+        #                                                                        #
+        #   Step 1 — Build the time-invariant atom single (c_l) and atom-pair    #
+        #     (p_lm) tensors once. They depend only on reference geometry, so    #
+        #     they can be cached across diffusion timesteps; if the caller       #
+        #     already supplied both we reuse them:                               #
+        #       if p_lm is None or c_l is None:                                  #
+        #           p_lm, c_l = self.prepare_cache(                              #
+        #               ref_pos=ref_pos, ref_charge=ref_charge,                  #
+        #               ref_mask=ref_mask,                                       #
+        #               ref_atom_name_chars=ref_atom_name_chars,                 #
+        #               ref_element=ref_element,                                 #
+        #               atom_to_token_idx=atom_to_token_idx,                     #
+        #               d_lm=d_lm, v_lm=v_lm, pad_info=pad_info,                 #
+        #               r_l=r_l, z=z,                                            #
+        #           )                                                            #
+        #                                                                        #
+        #   Step 2 — Build the query ``q_l``:                                    #
+        #     With coords (diffusion path) we additively fold in the broadcast   #
+        #     trunk-single ``s`` and the projected noisy coordinates ``r_l``;    #
+        #     ``c_l`` is updated in-place so it carries the trunk conditioning   #
+        #     for downstream pair fusion in Step 3.                              #
+        #     Without coords (input embedder path) the query is just a copy of   #
+        #     ``c_l``:                                                           #
+        #       n_token = None                                                   #
+        #       if r_l is not None:                                               #
+        #           assert s is not None                                          #
+        #           n_token = s.size(-2)                                          #
+        #           c_l = c_l.unsqueeze(-3) + broadcast_token_to_atom(          #
+        #               x_token=self.linear_no_bias_s(self.layernorm_s(s)),     #
+        #               atom_to_token_idx=atom_to_token_idx,                    #
+        #           )                                                            #
+        #           q_l = c_l + self.linear_no_bias_r(r_l)                      #
+        #       else:                                                            #
+        #           q_l = c_l.clone()                                            #
+        #                                                                        #
+        #   Step 3 — Fuse atom-single information into the local atom-pair      #
+        #     tensor. ``rearrange_qk_to_dense_trunk`` packs ``c_l`` into the     #
+        #     dense-trunk layout [..., n_blocks, n_queries|n_keys, c_atom] used #
+        #     by the local attention; the two ReLU-linear projections fan it    #
+        #     in across query/key axes; the small zero-init MLP refines it:     #
+        #       c_l_q, c_l_k, _ = rearrange_qk_to_dense_trunk(                  #
+        #           q=c_l, k=c_l, dim_q=-2, dim_k=-2,                            #
+        #           n_queries=self.n_queries, n_keys=self.n_keys,                #
+        #           compute_mask=False,                                          #
+        #       )                                                                #
+        #       p_lm = (                                                         #
+        #           p_lm                                                         #
+        #           + self.linear_no_bias_cl(F.relu(c_l_q[..., None, :]))        #
+        #           + self.linear_no_bias_cm(F.relu(c_l_k[..., None, :, :]))    #
+        #       )                                                                #
+        #       p_lm = p_lm + self.small_mlp(p_lm)                              #
+        #                                                                        #
+        #   Step 4 — Run the local atom-level transformer (Algorithm 7):         #
+        #       q_l = self.atom_transformer(q_l, c_l, p_lm)                     #
+        #                                                                        #
+        #   Step 5 — Aggregate atoms back to tokens with mean-pooling, after a   #
+        #     ReLU + projection from c_atom -> c_token:                          #
+        #       a = aggregate_atom_to_token(                                    #
+        #           x_atom=F.relu(self.linear_no_bias_q(q_l)),                  #
+        #           atom_to_token_idx=atom_to_token_idx,                        #
+        #           n_token=n_token,                                            #
+        #           reduce="mean",                                              #
+        #       )                                                                #
+        #   Return ``(a, q_l, c_l, p_lm)`` — note ``q_l`` is returned post-      #
+        #   transformer; ``c_l`` and ``p_lm`` are returned post-conditioning so  #
+        #   the decoder can use them as skips later.                             #
+        #                                                                        #
+        # TODO: 算法 5 —— AtomAttentionEncoder。                                  #
+        #   把每原子特征聚合成每 token 特征 ``a``，同时输出原子级状态 (q, c, p)，  #
+        #   供后续 AtomAttentionDecoder 做 skip 用。                              #
+        #                                                                        #
+        #   步骤 0 — 带坐标分支 (扩散循环) 的输入校验:                              #
+        #       if self.has_coords:                                               #
+        #           assert r_l is not None and s is not None and z is not None   #
+        #                                                                        #
+        #   步骤 1 — 计算与时间无关的 c_l / p_lm (只依赖参考几何，可跨扩散步缓存)。  #
+        #     调用方若已提供则复用:                                                #
+        #       if p_lm is None or c_l is None:                                  #
+        #           p_lm, c_l = self.prepare_cache(                              #
+        #               ref_pos=ref_pos, ref_charge=ref_charge,                  #
+        #               ref_mask=ref_mask,                                       #
+        #               ref_atom_name_chars=ref_atom_name_chars,                 #
+        #               ref_element=ref_element,                                 #
+        #               atom_to_token_idx=atom_to_token_idx,                     #
+        #               d_lm=d_lm, v_lm=v_lm, pad_info=pad_info,                 #
+        #               r_l=r_l, z=z,                                            #
+        #           )                                                            #
+        #                                                                        #
+        #   步骤 2 — 构造 query ``q_l``:                                          #
+        #     带坐标 (扩散) 时把主干 single 广播 + 噪声坐标投影加到 c_l，          #
+        #     这里 ``c_l`` 会被原地更新，从而带上 trunk 条件供步骤 3 使用；        #
+        #     不带坐标 (输入嵌入路径) 直接复制 c_l:                                #
+        #       n_token = None                                                   #
+        #       if r_l is not None:                                               #
+        #           assert s is not None                                          #
+        #           n_token = s.size(-2)                                          #
+        #           c_l = c_l.unsqueeze(-3) + broadcast_token_to_atom(          #
+        #               x_token=self.linear_no_bias_s(self.layernorm_s(s)),     #
+        #               atom_to_token_idx=atom_to_token_idx,                    #
+        #           )                                                            #
+        #           q_l = c_l + self.linear_no_bias_r(r_l)                      #
+        #       else:                                                            #
+        #           q_l = c_l.clone()                                            #
+        #                                                                        #
+        #   步骤 3 — 把原子 single 信息融入局部 atom-pair:                          #
+        #     ``rearrange_qk_to_dense_trunk`` 把 ``c_l`` 打包成局部注意力期望的    #
+        #     dense-trunk 形状；两个 ReLU+Linear 分别从 q / k 注入；               #
+        #     再过一个零初始化的小 MLP:                                            #
+        #       c_l_q, c_l_k, _ = rearrange_qk_to_dense_trunk(                  #
+        #           q=c_l, k=c_l, dim_q=-2, dim_k=-2,                            #
+        #           n_queries=self.n_queries, n_keys=self.n_keys,                #
+        #           compute_mask=False,                                          #
+        #       )                                                                #
+        #       p_lm = (                                                         #
+        #           p_lm                                                         #
+        #           + self.linear_no_bias_cl(F.relu(c_l_q[..., None, :]))        #
+        #           + self.linear_no_bias_cm(F.relu(c_l_k[..., None, :, :]))    #
+        #       )                                                                #
+        #       p_lm = p_lm + self.small_mlp(p_lm)                              #
+        #                                                                        #
+        #   步骤 4 — 跑局部 atom-level transformer (算法 7):                       #
+        #       q_l = self.atom_transformer(q_l, c_l, p_lm)                     #
+        #                                                                        #
+        #   步骤 5 — 原子 -> token 的 mean-pool 聚合 (先 ReLU 再投到 c_token):     #
+        #       a = aggregate_atom_to_token(                                    #
+        #           x_atom=F.relu(self.linear_no_bias_q(q_l)),                  #
+        #           atom_to_token_idx=atom_to_token_idx,                        #
+        #           n_token=n_token,                                            #
+        #           reduce="mean",                                              #
+        #       )                                                                #
+        #   返回 ``(a, q_l, c_l, p_lm)`` —— ``q_l`` 是过完 transformer 之后的；   #
+        #   ``c_l`` / ``p_lm`` 是带上条件之后的，供解码器做 skip。                  #
         ##########################################################################
 
         if self.has_coords:
@@ -451,16 +574,53 @@ class AtomAttentionDecoder(nn.Module):
             r: [..., N_atom, 3] coordinate update.
         """
         ##########################################################################
-        # TODO: Algorithm 6.                                                     #
-        #   1. Broadcast linear_no_bias_a(a) from token to atom level and add    #
-        #      the atom-level skip ``q_skip``.                                   #
-        #   2. Run AtomTransformer with conditioning ``c_skip`` and pair         #
-        #      ``p_skip``.                                                       #
-        #   3. Project to a 3-vector update via LayerNorm + linear_no_bias_out.  #
-        # TODO: Algorithm 6.                                                     #
-        #   1. 把 linear_no_bias_a(a) 从 token 广播到原子级，再加 q_skip。       #
-        #   2. AtomTransformer 用 c_skip + p_skip 作条件跑一次。                 #
-        #   3. LayerNorm + linear_no_bias_out 投到 3 维坐标更新。                #
+        # TODO: Algorithm 6 — AtomAttentionDecoder.                              #
+        #   Inverse direction of Algorithm 5: takes the token-level activation   #
+        #   ``a`` and three atom-level skip tensors (``q_skip`` / ``c_skip`` /   #
+        #   ``p_skip``) saved by the encoder, then predicts a per-atom 3-vector  #
+        #   coordinate update.                                                   #
+        #                                                                        #
+        #   Step 1 — Re-broadcast the token activation back to atoms (with the   #
+        #     atom→token index map) and fuse the encoder's atom-level skip       #
+        #     ``q_skip`` via a simple sum residual:                              #
+        #       q = broadcast_token_to_atom(                                    #
+        #               x_token=self.linear_no_bias_a(a),                       #
+        #               atom_to_token_idx=atom_to_token_idx,                    #
+        #           ) + q_skip                          # [..., N_atom, c_atom] #
+        #     ``linear_no_bias_a`` is LinearNoBias(c_token -> c_atom).           #
+        #                                                                        #
+        #   Step 2 — Run the local AtomTransformer (Algorithm 7), conditioning   #
+        #     on the encoder's ``c_skip`` (atom-single) and ``p_skip`` (atom-    #
+        #     pair, dense-trunk):                                                #
+        #       q = self.atom_transformer(q, c_skip, p_skip)                    #
+        #                                                                        #
+        #   Step 3 — LayerNorm + project to a 3-vector coordinate update.        #
+        #     ``layernorm_q`` runs without offset (LN with create_offset=False), #
+        #     and ``linear_no_bias_out`` is set to fp32 precision so coordinate  #
+        #     residuals stay numerically stable across diffusion samples:        #
+        #       return self.linear_no_bias_out(self.layernorm_q(q))             #
+        #                                                                        #
+        # TODO: 算法 6 —— AtomAttentionDecoder。                                  #
+        #   算法 5 的反向: 接收 token 级激活 ``a`` 以及编码器保留的三份             #
+        #   原子级 skip (``q_skip`` / ``c_skip`` / ``p_skip``)，预测每个原子的     #
+        #   3 维坐标更新。                                                        #
+        #                                                                        #
+        #   步骤 1 — 把 token 激活重新广播回原子，再叠加编码器的原子级 skip:        #
+        #       q = broadcast_token_to_atom(                                    #
+        #               x_token=self.linear_no_bias_a(a),                       #
+        #               atom_to_token_idx=atom_to_token_idx,                    #
+        #           ) + q_skip                          # [..., N_atom, c_atom] #
+        #     ``linear_no_bias_a`` 是 LinearNoBias(c_token -> c_atom)。           #
+        #                                                                        #
+        #   步骤 2 — 跑局部 AtomTransformer (算法 7)，                              #
+        #     用编码器的 ``c_skip`` (原子 single) 与 ``p_skip`` (原子 pair，       #
+        #     dense-trunk) 作为条件:                                              #
+        #       q = self.atom_transformer(q, c_skip, p_skip)                    #
+        #                                                                        #
+        #   步骤 3 — LayerNorm + 投到 3 维坐标增量。                                #
+        #     ``layernorm_q`` 不带 offset (create_offset=False)，                  #
+        #     ``linear_no_bias_out`` 用 fp32 精度保证坐标稳定:                     #
+        #       return self.linear_no_bias_out(self.layernorm_q(q))             #
         ##########################################################################
 
         q = broadcast_token_to_atom(

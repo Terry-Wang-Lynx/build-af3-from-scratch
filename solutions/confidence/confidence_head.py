@@ -154,18 +154,166 @@ class ConfidenceHead(nn.Module):
             (plddt_preds, pae_preds, pde_preds, resolved_preds).
         """
         ##########################################################################
-        # TODO: Algorithm 31. Confidence head.                                   #
-        #   1. Optionally detach the trunk outputs.                              #
-        #   2. Clamp and LayerNorm s_trunk.                                      #
-        #   3. Build initial pair conditioning z = LN(z_trunk) + projections    #
-        #      from s_inputs.                                                    #
-        #   4. For each diffusion sample, call ``memory_efficient_forward`` to   #
-        #      get (plddt, pae, pde, resolved) and stack along the sample dim.   #
-        # TODO: Algorithm 31。置信度头。                                          #
-        #   1. 可选地 detach 主干输出。                                          #
-        #   2. clamp 后 LayerNorm s_trunk。                                      #
-        #   3. 用 s_inputs 投影 + z_trunk 拼成初始 pair 条件 z。                  #
-        #   4. 对每个扩散样本调用 ``memory_efficient_forward``，沿样本维堆叠。   #
+        # TODO: Algorithm 31 — ConfidenceHead. Produces four predictions for     #
+        #   every diffusion sample:                                              #
+        #     - pLDDT          (per-atom local-distance-difference test)         #
+        #     - PAE            (predicted aligned error, per token-pair)         #
+        #     - PDE            (predicted distance error, per token-pair)        #
+        #     - resolved       (per-atom resolved-vs-unresolved classifier)      #
+        #                                                                        #
+        #   Step 1 — Optional stop-gradient: keep the trunk frozen so the        #
+        #     confidence head trains without touching the structure model. The  #
+        #     flag is configured in ``__init__`` (``self.stop_gradient``):       #
+        #       if self.stop_gradient:                                           #
+        #           s_inputs = s_inputs.detach()                                 #
+        #           s_trunk  = s_trunk.detach()                                  #
+        #           z_trunk  = z_trunk.detach()                                  #
+        #                                                                        #
+        #   Step 2 — Clamp + LayerNorm the trunk single track so very large      #
+        #     activations (sometimes seen on long sequences) do not blow up the  #
+        #     distance-bin softmax downstream:                                   #
+        #       s_trunk = self.input_strunk_ln(                                  #
+        #           torch.clamp(s_trunk, min=-512, max=512))                     #
+        #                                                                        #
+        #   Step 3 — Classifier-free path: zero the pair trunk if requested      #
+        #     (corresponds to dropping the structure conditioning entirely):     #
+        #       if not use_embedding:                                            #
+        #           z_trunk *= 0                                                 #
+        #                                                                        #
+        #   Step 4 — Select the representative atom per token (Cα for amino     #
+        #     acids, the per-residue centre for nucleic acids / ligands) and    #
+        #     remember how many diffusion samples we got:                        #
+        #       x_rep_atom_mask    = input_feature_dict[                         #
+        #                              "distogram_rep_atom_mask"].bool()          #
+        #       x_pred_rep_coords  = x_pred_coords[..., x_rep_atom_mask, :]       #
+        #       N_sample           = x_pred_rep_coords.size(-3)                  #
+        #                                                                        #
+        #   Step 5 — Build the initial pair conditioning by broadcasting two    #
+        #     LinearNoBias projections of ``s_inputs`` over the (token, token)   #
+        #     grid (outer-sum) and adding it to ``z_trunk``:                     #
+        #       z_init = (                                                       #
+        #           self.linear_no_bias_s1(s_inputs)[..., None, :, :]           #
+        #           + self.linear_no_bias_s2(s_inputs)[..., None, :]             #
+        #       )                                                                #
+        #       z_trunk = z_init + z_trunk                                       #
+        #       if not self.training:                                            #
+        #           del z_init                                                   #
+        #           if torch.cuda.is_available():                                #
+        #               torch.cuda.empty_cache()                                 #
+        #                                                                        #
+        #   Step 6 — Loop over diffusion samples. Each iteration calls           #
+        #     ``memory_efficient_forward`` (which adds the per-sample distance   #
+        #     bin features into a *clone* of the conditioning, then runs a       #
+        #     small PairformerStack + four classifier heads) and collects the   #
+        #     four output heads. For very long sequences move PAE/PDE to CPU    #
+        #     after each sample to keep GPU memory bounded:                      #
+        #       plddt_preds, pae_preds, pde_preds, resolved_preds = [],[],[],[] #
+        #       for i in range(N_sample):                                       #
+        #           (plddt_pred, pae_pred, pde_pred, resolved_pred              #
+        #           ) = self.memory_efficient_forward(                          #
+        #               input_feature_dict = input_feature_dict,                 #
+        #               s_trunk            = s_trunk.clone(),                    #
+        #               z_pair             = z_trunk.clone(),                    #
+        #               pair_mask          = pair_mask,                          #
+        #               x_pred_rep_coords  = x_pred_rep_coords[..., i, :, :],   #
+        #           )                                                            #
+        #           if z_trunk.shape[-2] > 2000 and not self.training:           #
+        #               pae_pred = pae_pred.cpu()                                #
+        #               pde_pred = pde_pred.cpu()                                #
+        #               if torch.cuda.is_available():                            #
+        #                   torch.cuda.empty_cache()                             #
+        #           plddt_preds.append(plddt_pred)                               #
+        #           pae_preds.append(pae_pred)                                   #
+        #           pde_preds.append(pde_pred)                                   #
+        #           resolved_preds.append(resolved_pred)                         #
+        #                                                                        #
+        #   Step 7 — Stack along the sample dimension. Mind the right axis for  #
+        #     each head:                                                         #
+        #       plddt_preds    = torch.stack(plddt_preds,    dim=-3)             #
+        #       # -> [..., N_sample, N_atom, plddt_bins]                         #
+        #       pae_preds      = torch.stack(pae_preds,      dim=-4)             #
+        #       # -> [..., N_sample, N_token, N_token, pae_bins]                 #
+        #       pde_preds      = torch.stack(pde_preds,      dim=-4)             #
+        #       # -> [..., N_sample, N_token, N_token, pde_bins]                 #
+        #       resolved_preds = torch.stack(resolved_preds, dim=-3)             #
+        #       # -> [..., N_sample, N_atom, 2]                                  #
+        #   Return ``(plddt_preds, pae_preds, pde_preds, resolved_preds)``.     #
+        #                                                                        #
+        # TODO: 算法 31 —— ConfidenceHead。对每个扩散样本输出四个置信预测:        #
+        #     - pLDDT          (每原子的 local-distance-difference test)        #
+        #     - PAE            (每 token pair 的 predicted aligned error)       #
+        #     - PDE            (每 token pair 的 predicted distance error)      #
+        #     - resolved       (每原子的可解析/未解析二分类)                      #
+        #                                                                        #
+        #   步骤 1 — 可选 stop-gradient: 冻结主干，让置信头独立训练。              #
+        #     由 ``__init__`` 的 ``self.stop_gradient`` 控制:                     #
+        #       if self.stop_gradient:                                           #
+        #           s_inputs = s_inputs.detach()                                 #
+        #           s_trunk  = s_trunk.detach()                                  #
+        #           z_trunk  = z_trunk.detach()                                  #
+        #                                                                        #
+        #   步骤 2 — clamp + LayerNorm 主干 single，避免长序列大激活值在下游        #
+        #     距离 bin softmax 中溢出:                                            #
+        #       s_trunk = self.input_strunk_ln(                                  #
+        #           torch.clamp(s_trunk, min=-512, max=512))                     #
+        #                                                                        #
+        #   步骤 3 — Classifier-free 路径: 若 use_embedding=False 则把 pair       #
+        #     trunk 清零 (相当于丢掉结构条件):                                     #
+        #       if not use_embedding:                                            #
+        #           z_trunk *= 0                                                 #
+        #                                                                        #
+        #   步骤 4 — 取每个 token 的代表原子 (氨基酸的 Cα、核酸/配体的中心)，       #
+        #     并记下样本数:                                                       #
+        #       x_rep_atom_mask    = input_feature_dict[                         #
+        #                              "distogram_rep_atom_mask"].bool()          #
+        #       x_pred_rep_coords  = x_pred_coords[..., x_rep_atom_mask, :]       #
+        #       N_sample           = x_pred_rep_coords.size(-3)                  #
+        #                                                                        #
+        #   步骤 5 — 由 ``s_inputs`` 的两次线性投影在 (token, token) 网格上做外加，#
+        #     加到 ``z_trunk`` 作为初始 pair 条件:                                 #
+        #       z_init = (                                                       #
+        #           self.linear_no_bias_s1(s_inputs)[..., None, :, :]           #
+        #           + self.linear_no_bias_s2(s_inputs)[..., None, :]             #
+        #       )                                                                #
+        #       z_trunk = z_init + z_trunk                                       #
+        #       if not self.training:                                            #
+        #           del z_init                                                   #
+        #           if torch.cuda.is_available():                                #
+        #               torch.cuda.empty_cache()                                 #
+        #                                                                        #
+        #   步骤 6 — 对每个扩散样本调 ``memory_efficient_forward`` (它会把当前样本 #
+        #     的距离 bin 特征加到 ``z_pair`` 的克隆上，再跑小型 PairformerStack +  #
+        #     四个分类头)；超长序列时把 PAE/PDE 转 CPU:                              #
+        #       plddt_preds, pae_preds, pde_preds, resolved_preds = [],[],[],[] #
+        #       for i in range(N_sample):                                       #
+        #           (plddt_pred, pae_pred, pde_pred, resolved_pred              #
+        #           ) = self.memory_efficient_forward(                          #
+        #               input_feature_dict = input_feature_dict,                 #
+        #               s_trunk            = s_trunk.clone(),                    #
+        #               z_pair             = z_trunk.clone(),                    #
+        #               pair_mask          = pair_mask,                          #
+        #               x_pred_rep_coords  = x_pred_rep_coords[..., i, :, :],   #
+        #           )                                                            #
+        #           if z_trunk.shape[-2] > 2000 and not self.training:           #
+        #               pae_pred = pae_pred.cpu()                                #
+        #               pde_pred = pde_pred.cpu()                                #
+        #               if torch.cuda.is_available():                            #
+        #                   torch.cuda.empty_cache()                             #
+        #           plddt_preds.append(plddt_pred)                               #
+        #           pae_preds.append(pae_pred)                                   #
+        #           pde_preds.append(pde_pred)                                   #
+        #           resolved_preds.append(resolved_pred)                         #
+        #                                                                        #
+        #   步骤 7 — 按各自的正确轴沿样本维 stack:                                  #
+        #       plddt_preds    = torch.stack(plddt_preds,    dim=-3)             #
+        #       # -> [..., N_sample, N_atom, plddt_bins]                         #
+        #       pae_preds      = torch.stack(pae_preds,      dim=-4)             #
+        #       # -> [..., N_sample, N_token, N_token, pae_bins]                 #
+        #       pde_preds      = torch.stack(pde_preds,      dim=-4)             #
+        #       # -> [..., N_sample, N_token, N_token, pde_bins]                 #
+        #       resolved_preds = torch.stack(resolved_preds, dim=-3)             #
+        #       # -> [..., N_sample, N_atom, 2]                                  #
+        #   返回 ``(plddt_preds, pae_preds, pde_preds, resolved_preds)``。       #
         ##########################################################################
 
         if self.stop_gradient:

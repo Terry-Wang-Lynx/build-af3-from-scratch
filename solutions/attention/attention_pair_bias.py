@@ -161,21 +161,80 @@ class AttentionPairBias(nn.Module):
         given, otherwise ``standard_multihead_attention``.
         """
         ##########################################################################
-        # TODO: Algorithm 24. Steps:                                              #
-        #   1. Normalize the query input ``a`` (adaptive if has_s, plain LN o.w.).#
-        #   2. If ``cross_attention_mode``, build ``kv`` from a second LN; else  #
-        #      reuse ``a`` for both query and kv.                                #
-        #   3. Dispatch to local vs standard multi-head attention based on       #
-        #      whether ``n_queries``/``n_keys`` are passed.                      #
-        #   4. If has_s, apply the adaLN-Zero output gate                        #
-        #      ``sigmoid(linear_a_last(s)) * a``.                                #
-        # TODO: Algorithm 24. 步骤:                                              #
-        #   1. 归一化 query 输入 ``a`` (has_s 时用 adaptive，否则普通 LN)。       #
-        #   2. 若 ``cross_attention_mode``，再过一次 LN 得到 ``kv``；否则        #
-        #      query 与 kv 共用 ``a``。                                          #
-        #   3. 根据是否给了 ``n_queries`` / ``n_keys`` 分派到 local / standard 。 #
-        #   4. has_s 时再叠一次 adaLN-Zero 输出门                                 #
-        #      ``sigmoid(linear_a_last(s)) * a``。                               #
+        # TODO: Algorithm 24 — Attention with Pair Bias (+ optional adaLN-Zero). #
+        #                                                                        #
+        #   Step 1 — Normalize the query stream ``a``:                           #
+        #       if self.has_s:                                                   #
+        #           a = self.layernorm_a(a=a, s=s)   # AdaptiveLayerNorm (Alg 26)#
+        #       else:                                                           #
+        #           a = self.layernorm_a(a)          # plain LayerNorm           #
+        #                                                                        #
+        #   Step 2 — Build the key/value stream:                                 #
+        #       if self.cross_attention_mode:                                    #
+        #           # cross-attention: kv comes from a separate LN over ``a``    #
+        #           kv = self.layernorm_kv(a=a, s=s) if self.has_s              #
+        #                else self.layernorm_kv(a)                              #
+        #       else:                                                            #
+        #           # self-attention: kv reuses the normalized query             #
+        #           kv = a                                                       #
+        #                                                                        #
+        #   Step 3 — Run attention with pair-derived bias. The helper methods    #
+        #     handle the bias projection ``Linear(LayerNorm(z))`` and the head-  #
+        #     dim permutation internally:                                        #
+        #       if n_queries and n_keys:                                         #
+        #           # AtomTransformer path — windowed local attention, ``z`` is  #
+        #           # already in dense-trunk form [..., n_blocks, n_q, n_k, c_z] #
+        #           a = self.local_multihead_attention(                          #
+        #                 a, kv, z, n_queries, n_keys)                           #
+        #       else:                                                            #
+        #           # full attention — ``z`` is [..., N_token, N_token, c_z]     #
+        #           a = self.standard_multihead_attention(a, kv, z)              #
+        #                                                                        #
+        #   Step 4 — adaLN-Zero output gate (only when ``has_s``):               #
+        #       if self.has_s:                                                   #
+        #           a = a * torch.sigmoid(self.linear_a_last(s))                 #
+        #     ``linear_a_last`` is a BiasInitLinear with bias initialized to     #
+        #     ``biasinit = -2.0`` so sigmoid(-2)≈0.12, i.e. the gate is closed   #
+        #     at init and the residual branch starts near zero (Peebles & Xie   #
+        #     2023, DiT). When ``has_s`` is False the gate is fused into the    #
+        #     zero-initialized output projection of ``self.attention``.         #
+        #                                                                        #
+        # TODO: 算法 24 — 带 pair bias 的注意力 (+ 可选 adaLN-Zero 输出门)。      #
+        #                                                                        #
+        #   步骤 1 — 归一化查询流 ``a``:                                          #
+        #       if self.has_s:                                                   #
+        #           a = self.layernorm_a(a=a, s=s)   # AdaptiveLayerNorm(算法 26)#
+        #       else:                                                           #
+        #           a = self.layernorm_a(a)          # 普通 LayerNorm            #
+        #                                                                        #
+        #   步骤 2 — 构造 key/value 流:                                           #
+        #       if self.cross_attention_mode:                                    #
+        #           # 交叉注意力: kv 走另一支 LN                                 #
+        #           kv = self.layernorm_kv(a=a, s=s) if self.has_s              #
+        #                else self.layernorm_kv(a)                              #
+        #       else:                                                            #
+        #           # 自注意力: kv 直接复用归一化后的查询                         #
+        #           kv = a                                                       #
+        #                                                                        #
+        #   步骤 3 — 跑带 pair bias 的注意力。bias 投影 ``Linear(LayerNorm(z))`` #
+        #     以及 head 维 permute 由下面的辅助方法内部完成:                      #
+        #       if n_queries and n_keys:                                         #
+        #           # AtomTransformer 路径 — 局部窗口注意力，``z`` 已是             #
+        #           # dense-trunk 形状 [..., n_blocks, n_q, n_k, c_z]            #
+        #           a = self.local_multihead_attention(                          #
+        #                 a, kv, z, n_queries, n_keys)                           #
+        #       else:                                                            #
+        #           # 全连接注意力 — ``z`` 形状 [..., N_token, N_token, c_z]     #
+        #           a = self.standard_multihead_attention(a, kv, z)              #
+        #                                                                        #
+        #   步骤 4 — adaLN-Zero 输出门 (仅 ``has_s`` 时):                          #
+        #       if self.has_s:                                                   #
+        #           a = a * torch.sigmoid(self.linear_a_last(s))                 #
+        #     ``linear_a_last`` 是 BiasInitLinear，bias 初始化为                  #
+        #     ``biasinit = -2.0``，sigmoid(-2)≈0.12，                            #
+        #     初始残差分支接近 0 (Peebles & Xie 2023, DiT)。                      #
+        #     若 ``has_s`` 为 False，输出门并入 ``self.attention``                #
+        #     零初始化的输出投影，无需再乘。                                      #
         ##########################################################################
 
         if self.has_s:
