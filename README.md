@@ -1,84 +1,83 @@
 # build-your-af3
 
-<table><tr><td>
+[English version](README.en.md)
 
-**English** — An educational, Mac-friendly **AlphaFold 3** reimplementation,
-built in the same chapter-by-chapter format as
-[alphafold-decoded](https://github.com/kilianmandon/alphafold-decoded) (AF2)
-but targeting AF3 architecture and weights. Loads the official **ByteDance
-Protenix** checkpoints unchanged; runs on CPU, Apple-Silicon MPS, or CUDA.
-
-</td><td>
-
-**中文** — 一个面向教学、对 Mac 友好的 **AlphaFold 3** 复现项目。沿用
+一个面向教学、对 Mac 友好的 **AlphaFold 3** 复现项目。沿用
 [alphafold-decoded](https://github.com/kilianmandon/alphafold-decoded)（AF2 版）
-按章节拆分的写法，但目标是 AF3 架构和权重。可直接加载字节跳动 **Protenix**
+按章节拆分的写法，但目标换成 AF3 架构和权重。可直接加载字节跳动 **Protenix**
 官方 checkpoint，CPU / Apple Silicon MPS / CUDA 都能跑。
 
-</td></tr></table>
+## 项目结构
 
-## 项目结构 · Project layout
-
-照搬参考项目的三部分结构 · Mirrors the reference's three-fold structure:
+照搬参考项目的三部分结构：
 
 ```
 build-af3-from-scratch/
-├── lessons/      # 章节讲解 (markdown)            ·  per-chapter writeups
-├── tutorials/    # 学生填空版 (auto-generated)     ·  fill-the-blank notebooks
-└── solutions/    # 完整参考实现                    ·  complete reference impl
+├── lessons/      # 章节讲解（markdown）
+├── tutorials/    # 学生填空版（自动生成）
+└── solutions/    # 完整参考实现
     ├── attention/                # MHA + LayerNorm + AttentionPairBias
-    ├── feature_extraction/       # JSON / MSA / template → tensors  数据特征化
+    ├── feature_extraction/       # JSON / MSA / template → 张量
     ├── feature_embedding/        # 输入嵌入 + Atom Attention Encoder
     ├── pairformer/               # Pairformer + MSAModule + Triangle ops
     ├── diffusion/                # DiffusionModule + Transformer + sampler
     ├── confidence/               # ConfidenceHead + 置信度计算
-    ├── model/                    # 顶层 Protenix 装配 + inference driver
-    ├── configs/                  # 配置字典 + ConfigDict 解析  (shared)
-    └── runtime/                  # seed / logger / torch utils  (shared)
+    ├── model/                    # 顶层 Protenix 装配 + 推理入口
+    ├── configs/                  # 配置字典 + ConfigDict 解析（公共）
+    └── runtime/                  # seed / logger / torch utils（公共）
 ```
 
-每一章都是一个 *flat Python package*，内部文件之间通过
-`from <chapter>.<file> import <Class>` 互相 import——和 AF2 参考完全一致。
+每一章都是一个 *flat Python package*，章内文件之间用
+`from <chapter>.<file> import <Class>` 互相 import —— 与 AF2 参考完全一致。
 
-Each chapter is a flat Python package; intra-chapter imports use the
-fully-qualified form `from <chapter>.<file> import <Class>`, identical to
-the AF2 reference.
+## 三件套：solutions / tutorials / lessons
 
-## 为什么要做 AF3 版？ · Why an AF3 version?
+| 目录 | 内容 | 用法 |
+|---|---|---|
+| `solutions/` | 完整参考实现 | 写完 tutorials 后对照检查；学习时尽量不要先看。 |
+| `tutorials/` | `prepare_tutorials.py` 从 `solutions/` 自动剥出的填空版：所有被包裹的 `forward` 内容替换成 `pass`，TODO 上方保留详细伪代码 | 学生按 TODO 一步步把空填上。 |
+| `lessons/` | 每章的教学 markdown | 想了解算法 / 数学背景时阅读。 |
+
+重新生成填空版：
+
+```bash
+python prepare_tutorials.py        # solutions/* → tutorials/*
+python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
+```
+
+## 为什么要做 AF3 版？
 
 AF3 在架构上有几个关键变化，没法直接复用 AF2 那一套章节：
 
-AF3 introduces architectural changes that don't fit the AF2 mold:
-
-| AF2 chapter           | AF3 equivalent                            |
+| AF2 章节              | AF3 对应                                  |
 |-----------------------|-------------------------------------------|
-| `evoformer`           | `pairformer` (+ `msa_stack`)              |
+| `evoformer`           | `pairformer`（+ `msa_stack`）              |
 | `structure_module`    | `diffusion`                               |
 | `feature_embedding`   | + AtomAttentionEncoder                    |
-| `geometry`            | 大部分融进 diffusion module · absorbed into diffusion |
+| `geometry`            | 大部分融进 diffusion module               |
 
-中间几章因此和 AF2 不同，但底层 primitives（attention / residual /
-axial ops）还是同一套。
+中间几章因此和 AF2 不同，但底层 primitives（attention / residual / axial ops）
+还是同一套。
 
-## 快速开始 · Quickstart
+## 快速开始
 
-### 1. 安装 · Install
+### 1. 安装
 
-Mac / Apple Silicon:
+Mac / Apple Silicon：
 
 ```bash
 conda env create -f environment_mac.yml
 conda activate af3
 ```
 
-CPU only (Linux/Mac):
+CPU only（Linux / Mac）：
 
 ```bash
 conda env create -f environment_cpu.yml
 conda activate af3
 ```
 
-或用 venv + pip:
+或者 venv + pip：
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
@@ -89,9 +88,9 @@ pip install torch torchvision \
             matplotlib ipykernel ipywidgets py3dmol icecream fair-esm
 ```
 
-### 2. 下载权重 · Download a checkpoint
+### 2. 下载权重
 
-We use the official Protenix-Tiny (~110 M parameters, MSA-based):
+用官方 Protenix-Tiny（约 110 M 参数，MSA 版）：
 
 ```bash
 mkdir -p checkpoints
@@ -99,31 +98,35 @@ curl -L -o checkpoints/protenix_tiny_default_v0.5.0.pt \
     https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_tiny_default_v0.5.0.pt
 ```
 
-辅助缓存（CCD 化学组件等）会在首次推理时自动下到 `~/common/`。
-Auxiliary caches (CCD chemistry, etc.) auto-download to `~/common/` on first run.
+辅助缓存（CCD 化学组件等）会在首次推理时自动下载到 `~/common/`。
 
-### 3. 运行推理 · Run inference
+### 3. 运行推理
 
 ```bash
 cd solutions
 LAYERNORM_TYPE=torch python -m model.inference \
-    --input_json /path/to/example.json \
+    --input_json examples/example.json \
     --dump_dir   ./out \
     --device     mps            # 或 cpu / cuda
 ```
 
-每个样本会产出 `*.cif` 和 `*_summary_confidence_*.json`。
-For each sample the runner produces a `*.cif` and a `*_summary_confidence_*.json`.
-
+每个样本会产出一个 `*.cif` 和一个 `*_summary_confidence_*.json`。
 完整示例 JSON 见 `solutions/examples/example.json`（自带 7r6r 蛋白 + MSA）。
-A complete example JSON is at `solutions/examples/example.json` (bundled 7r6r protein + MSA).
 
-### 4. 验证 · Verify
+### 4. 端到端 demo
 
-200 残基左右的蛋白，在 M2 Max（CPU）上：pLDDT ≈ 74，单次前向 ≈ 4.3 s。
-切到 MPS 后约快 1.6×。
+```bash
+jupyter notebook solutions/overview.ipynb
+```
 
-## 章节如何拼起来 · How the chapters compose
+notebook 走完一整圈：构建模型 → 加载权重 → 特征化 → 推理 → 写 CIF → 可视化。
+
+### 5. 验证
+
+约 200 残基的蛋白，单次前向在 CPU 上约 4–10 秒，pLDDT 大致落在 30–75 区间
+（依赖 PyTorch 版本和后端）；切到 MPS 大约快 1.6 倍。
+
+## 章节如何拼起来
 
 ```
                        ┌─ feature_extraction ─┐
@@ -151,7 +154,7 @@ A complete example JSON is at `solutions/examples/example.json` (bundled 7r6r pr
        └──────┬─────────────────────────────────────┘
               ▼
        ┌────────────────────────────────────────────┐
-       │  confidence  (Alg 26-31)                   │
+       │  confidence  (Alg 26–31)                   │
        │  · ConfidenceHead + DistogramHead          │
        │  · pTM / iPTM / pLDDT / clash              │
        └────────────────────────────────────────────┘
@@ -159,27 +162,21 @@ A complete example JSON is at `solutions/examples/example.json` (bundled 7r6r pr
 
 `model/model.py` 把这些模块按 Algorithm 1 串起来。
 
-## 特性 · Features
+## 特性
 
-- Chapter-by-chapter Python package layout — every block lives in the file
-  named after it.
-  按章节拆分的 Python 包结构 —— 每个模块住在以它命名的文件里。
-- Pure-PyTorch model: runs on CPU, Apple Silicon MPS, and CUDA.
-  纯 PyTorch 实现，CPU / MPS / CUDA 都能跑。
-- Loads the official ByteDance Protenix Tiny / Mini checkpoints out of the box.
-  开箱即用加载字节跳动 Protenix Tiny / Mini 官方权重。
-- Bilingual (English + 中文) docstrings on the public API.
-  公开 API 全部带中英双语 docstring。
+- 按章节拆分的 Python 包结构 —— 每个模块住在以它命名的文件里。
+- 纯 PyTorch 实现，CPU / MPS / CUDA 都能跑。
+- 开箱即用加载字节跳动 Protenix Tiny / Mini 官方权重。
+- 公开 API 全部带中英双语 docstring。
+- 每个被包裹的 `forward` / 关键 `__init__` 上方都写有详细伪代码 TODO，
+  学生照着填出来的就是与 Protenix 权重完全兼容的实现。
 
-## 致谢 · Acknowledgements
+## 致谢
 
-- **ByteDance Protenix** — AF3 architecture implementation and open weights.
-  字节跳动 Protenix —— AF3 架构实现 + 开源权重。
-- **`alphafold-decoded`** by Kilian Mandon — the chapter-by-chapter
-  pedagogical format.
-  alphafold-decoded（Kilian Mandon）—— 按章节拆分的教学结构。
-- **DeepMind** — AlphaFold 3 paper.
+- **字节跳动 Protenix** —— AF3 架构实现 + 开源权重。
+- **`alphafold-decoded`**（Kilian Mandon）—— 按章节拆分的教学结构。
+- **DeepMind** —— AlphaFold 3 论文。
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Apache 2.0，见 [LICENSE](LICENSE)。
