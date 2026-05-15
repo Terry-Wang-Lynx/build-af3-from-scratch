@@ -66,6 +66,96 @@ class AttentionPairBias(nn.Module):
         self.has_s = has_s
         self.create_offset_ln_z = create_offset_ln_z
         self.cross_attention_mode = cross_attention_mode
+        ##########################################################################
+        # TODO: AttentionPairBias (Algorithm 24) — build the sub-modules.        #
+        #                                                                        #
+        #   Step 1 — Query-stream LayerNorm. ``has_s=True`` (we're inside        #
+        #     DiffusionTransformer, ``s`` is available) -> AdaLN. Otherwise     #
+        #     (e.g. PairformerBlock) -> plain LN. In cross-attention mode add   #
+        #     a parallel ``layernorm_kv`` for the kv stream:                     #
+        #       if has_s:                                                        #
+        #           self.layernorm_a = AdaptiveLayerNorm(c_a=c_a, c_s=c_s)       #
+        #           if self.cross_attention_mode:                                #
+        #               self.layernorm_kv = AdaptiveLayerNorm(c_a=c_a, c_s=c_s) #
+        #       else:                                                            #
+        #           self.layernorm_a = LayerNorm(c_a)                            #
+        #           if self.cross_attention_mode:                                #
+        #               self.layernorm_kv = LayerNorm(c_a)                       #
+        #                                                                        #
+        #   Step 2 — Underlying multi-head attention. ``c_a // n_heads`` is the  #
+        #     per-head hidden dim. ``zero_init=True`` only when the adaLN-Zero  #
+        #     output gate is missing (``has_s=False`` means the residual must   #
+        #     start at zero via ``linear_o``):                                   #
+        #       self.local_attention_method = "local_cross_attention"            #
+        #       self.attention = Attention(                                      #
+        #           c_q=c_a, c_k=c_a, c_v=c_a,                                   #
+        #           c_hidden=c_a // n_heads,                                     #
+        #           num_heads=n_heads,                                           #
+        #           gating=True,                                                 #
+        #           q_linear_bias=True,                                          #
+        #           local_attention_method=self.local_attention_method,          #
+        #           zero_init=not self.has_s,                                    #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 3 — Pair-bias projection: LayerNorm over ``z`` (offset is       #
+        #     configurable: Pairformer wants offset=True, DiffusionTransformer  #
+        #     leaves it off) + LinearNoBias to ``n_heads``:                      #
+        #       self.layernorm_z = LayerNorm(                                    #
+        #           c_z, create_offset=self.create_offset_ln_z)                 #
+        #       self.linear_nobias_z = LinearNoBias(                            #
+        #           in_features=c_z, out_features=n_heads)                      #
+        #                                                                        #
+        #   Step 4 — adaLN-Zero output gate. Only built when ``has_s``:          #
+        #     BiasInitLinear(c_s -> c_a) with bias starting at ``biasinit``     #
+        #     (default -2 -> sigmoid(-2)≈0.12, gate closed at init):            #
+        #       if self.has_s:                                                   #
+        #           self.linear_a_last = BiasInitLinear(                        #
+        #               in_features=c_s, out_features=c_a,                      #
+        #               bias=True, biasinit=biasinit)                            #
+        #                                                                        #
+        # TODO: AttentionPairBias (算法 24) —— 构造子模块。                       #
+        #                                                                        #
+        #   步骤 1 — 查询流 LayerNorm。``has_s=True`` (在 DiffusionTransformer    #
+        #     里能拿到 ``s``) -> AdaLN；否则 -> 普通 LN。cross-attention 时       #
+        #     另起一支 ``layernorm_kv``:                                          #
+        #       if has_s:                                                        #
+        #           self.layernorm_a = AdaptiveLayerNorm(c_a=c_a, c_s=c_s)       #
+        #           if self.cross_attention_mode:                                #
+        #               self.layernorm_kv = AdaptiveLayerNorm(c_a=c_a, c_s=c_s) #
+        #       else:                                                            #
+        #           self.layernorm_a = LayerNorm(c_a)                            #
+        #           if self.cross_attention_mode:                                #
+        #               self.layernorm_kv = LayerNorm(c_a)                       #
+        #                                                                        #
+        #   步骤 2 — 底层多头注意力。``c_a // n_heads`` 是每头隐藏维。             #
+        #     ``zero_init=True`` 只在缺 adaLN-Zero 输出门时 (``has_s=False``)   #
+        #     使用 —— 让残差从 0 起手:                                            #
+        #       self.local_attention_method = "local_cross_attention"            #
+        #       self.attention = Attention(                                      #
+        #           c_q=c_a, c_k=c_a, c_v=c_a,                                   #
+        #           c_hidden=c_a // n_heads,                                     #
+        #           num_heads=n_heads,                                           #
+        #           gating=True,                                                 #
+        #           q_linear_bias=True,                                          #
+        #           local_attention_method=self.local_attention_method,          #
+        #           zero_init=not self.has_s,                                    #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 3 — pair bias 投影: 对 ``z`` LayerNorm (offset 由调用方控制) +  #
+        #     LinearNoBias 投到 ``n_heads`` 维 (每头一个标量偏置):                 #
+        #       self.layernorm_z = LayerNorm(                                    #
+        #           c_z, create_offset=self.create_offset_ln_z)                 #
+        #       self.linear_nobias_z = LinearNoBias(                            #
+        #           in_features=c_z, out_features=n_heads)                      #
+        #                                                                        #
+        #   步骤 4 — adaLN-Zero 输出门。仅 ``has_s`` 时构建。BiasInitLinear      #
+        #     (c_s -> c_a)，bias 初始为 ``biasinit`` (默认 -2):                  #
+        #       if self.has_s:                                                   #
+        #           self.linear_a_last = BiasInitLinear(                        #
+        #               in_features=c_s, out_features=c_a,                      #
+        #               bias=True, biasinit=biasinit)                            #
+        ##########################################################################
+
         if has_s:
             # Line2
             self.layernorm_a = AdaptiveLayerNorm(c_a=c_a, c_s=c_s)
@@ -99,6 +189,10 @@ class AttentionPairBias(nn.Module):
                 in_features=c_s, out_features=c_a, bias=True, biasinit=biasinit
             )
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
+
     def local_multihead_attention(
         self,
         q: torch.Tensor,
@@ -117,6 +211,57 @@ class AttentionPairBias(nn.Module):
         Returns:
             [..., N_atom, c_a] updated query
         """
+        ##########################################################################
+        # TODO: Local (windowed) Attention with Pair Bias for AtomTransformer.   #
+        #   The bias ``z`` arrives **already in dense-trunk form**:               #
+        #   ``[..., n_blocks, n_queries, n_keys, c_z]``.                          #
+        #                                                                        #
+        #   Step 1 — Sanity check the trunk shape matches the configured        #
+        #     window sizes:                                                      #
+        #       assert n_queries == z.size(-3)                                   #
+        #       assert n_keys    == z.size(-2)                                   #
+        #       assert len(z.shape) == len(q.shape) + 2                          #
+        #                                                                        #
+        #   Step 2 — Project the per-pair bias to per-head logits, then          #
+        #     permute the channel (now head) axis ahead of the trunk / query /  #
+        #     key axes so the underlying attention can broadcast it cleanly:    #
+        #       bias = self.linear_nobias_z(self.layernorm_z(z))                #
+        #                                       # [..., n_blocks, n_q, n_k, H]  #
+        #       bias = permute_final_dims(bias, [3, 0, 1, 2])                   #
+        #                                       # [..., H, n_blocks, n_q, n_k]  #
+        #                                                                        #
+        #   Step 3 — Call the underlying multi-head attention with the trunked  #
+        #     bias path turned on:                                               #
+        #       return self.attention(                                           #
+        #           q_x=q, kv_x=kv,                                              #
+        #           trunked_attn_bias=bias,                                      #
+        #           n_queries=n_queries, n_keys=n_keys,                          #
+        #       )                                                                #
+        #                                                                        #
+        # TODO: 局部 (窗口) Attention with Pair Bias，供 AtomTransformer 使用。   #
+        #   bias 张量 ``z`` 已是 dense-trunk 形状:                                #
+        #   ``[..., n_blocks, n_queries, n_keys, c_z]``。                         #
+        #                                                                        #
+        #   步骤 1 — trunk 形状与窗口配置一致:                                     #
+        #       assert n_queries == z.size(-3)                                   #
+        #       assert n_keys    == z.size(-2)                                   #
+        #       assert len(z.shape) == len(q.shape) + 2                          #
+        #                                                                        #
+        #   步骤 2 — 把每 pair 的 bias 投到每头 logits，再把通道(head)轴前移       #
+        #     到 trunk / q / k 之前，便于下游 attention 广播:                      #
+        #       bias = self.linear_nobias_z(self.layernorm_z(z))                #
+        #                                       # [..., n_blocks, n_q, n_k, H]  #
+        #       bias = permute_final_dims(bias, [3, 0, 1, 2])                   #
+        #                                       # [..., H, n_blocks, n_q, n_k]  #
+        #                                                                        #
+        #   步骤 3 — 调底层多头注意力，启用 trunked bias 路径:                      #
+        #       return self.attention(                                           #
+        #           q_x=q, kv_x=kv,                                              #
+        #           trunked_attn_bias=bias,                                      #
+        #           n_queries=n_queries, n_keys=n_keys,                          #
+        #       )                                                                #
+        ##########################################################################
+
         assert n_queries == z.size(-3)
         assert n_keys == z.size(-2)
         assert len(z.shape) == len(q.shape) + 2
@@ -127,6 +272,10 @@ class AttentionPairBias(nn.Module):
             q_x=q, kv_x=kv, trunked_attn_bias=bias,
             n_queries=n_queries, n_keys=n_keys,
         )
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def standard_multihead_attention(
         self,
@@ -143,9 +292,46 @@ class AttentionPairBias(nn.Module):
         Returns:
             [..., N_token, c_a] updated query
         """
+        ##########################################################################
+        # TODO: Standard (full) Attention with Pair Bias. Used by PairformerBlock#
+        #   and the token-level DiffusionTransformer; here ``z`` is the regular #
+        #   square pair tensor ``[..., N_token, N_token, c_z]``.                 #
+        #                                                                        #
+        #   Step 1 — LayerNorm + project ``z`` to per-head bias logits:          #
+        #       bias = self.linear_nobias_z(self.layernorm_z(z))                #
+        #                                       # [..., N, N, H]                #
+        #                                                                        #
+        #   Step 2 — Permute heads ahead of the (q, k) grid for downstream      #
+        #     attention:                                                         #
+        #       bias = permute_final_dims(bias, [2, 0, 1])                      #
+        #                                       # [..., H, N, N]                #
+        #                                                                        #
+        #   Step 3 — Run the full-attention path (no n_queries / n_keys):       #
+        #       return self.attention(q_x=q, kv_x=kv, attn_bias=bias)           #
+        #                                                                        #
+        # TODO: 全连接 Attention with Pair Bias，供 PairformerBlock 和             #
+        #   token 级 DiffusionTransformer 使用；``z`` 是正方形 pair 张量          #
+        #   ``[..., N_token, N_token, c_z]``。                                    #
+        #                                                                        #
+        #   步骤 1 — LayerNorm + 投到每头偏置 logits:                              #
+        #       bias = self.linear_nobias_z(self.layernorm_z(z))                #
+        #                                       # [..., N, N, H]                #
+        #                                                                        #
+        #   步骤 2 — 把 head 维移到 (q, k) 网格之前:                                #
+        #       bias = permute_final_dims(bias, [2, 0, 1])                      #
+        #                                       # [..., H, N, N]                #
+        #                                                                        #
+        #   步骤 3 — 走全连接路径 (不传 n_queries / n_keys):                       #
+        #       return self.attention(q_x=q, kv_x=kv, attn_bias=bias)           #
+        ##########################################################################
+
         bias = self.linear_nobias_z(self.layernorm_z(z))
         bias = permute_final_dims(bias, [2, 0, 1])  # [..., H, N, N]
         return self.attention(q_x=q, kv_x=kv, attn_bias=bias)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(
         self,

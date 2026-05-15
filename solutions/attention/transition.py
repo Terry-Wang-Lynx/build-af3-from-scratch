@@ -43,12 +43,61 @@ class AdaptiveLayerNorm(nn.Module):
 
     def __init__(self, c_a: int = 768, c_s: int = 384) -> None:
         super(AdaptiveLayerNorm, self).__init__()
+        ##########################################################################
+        # TODO: AdaptiveLayerNorm (Algorithm 26) — four sub-modules:             #
+        #                                                                        #
+        #   - ``layernorm_a``: LayerNorm over ``c_a`` with NO learnable scale,   #
+        #     NO offset — pure z-score (the modulation comes from ``s``):       #
+        #       self.layernorm_a = LayerNorm(                                    #
+        #           c_a, create_scale=False, create_offset=False)                #
+        #                                                                        #
+        #   - ``layernorm_s``: LayerNorm over ``c_s`` keeping its scale,         #
+        #     dropping the offset:                                               #
+        #       self.layernorm_s = LayerNorm(c_s, create_offset=False)           #
+        #                                                                        #
+        #   - ``linear_s``: zero-init Linear(c_s -> c_a) that, after a sigmoid, #
+        #     becomes the per-channel scale on ``a``. Zero-init means           #
+        #     sigmoid(0)=0.5 -> AdaLN-Zero starts near identity:                 #
+        #       self.linear_s = Linear(                                          #
+        #           in_features=c_s, out_features=c_a, initializer="zeros")     #
+        #                                                                        #
+        #   - ``linear_nobias_s``: zero-init LinearNoBias(c_s -> c_a) producing #
+        #     the additive shift on ``a``:                                       #
+        #       self.linear_nobias_s = LinearNoBias(                            #
+        #           in_features=c_s, out_features=c_a, initializer="zeros")     #
+        #                                                                        #
+        # TODO: AdaptiveLayerNorm (算法 26) —— 四个子模块:                        #
+        #                                                                        #
+        #   - ``layernorm_a``: 对 ``c_a`` 做 LayerNorm，**无** scale / offset    #
+        #     (调制来自 ``s``):                                                  #
+        #       self.layernorm_a = LayerNorm(                                    #
+        #           c_a, create_scale=False, create_offset=False)                #
+        #                                                                        #
+        #   - ``layernorm_s``: 对 ``c_s`` 做 LayerNorm，保留 scale、去 offset:    #
+        #       self.layernorm_s = LayerNorm(c_s, create_offset=False)           #
+        #                                                                        #
+        #   - ``linear_s``: 零初始化 Linear(c_s -> c_a)，与 sigmoid 组合成        #
+        #     ``a`` 的每通道 scale。零初始化使 sigmoid(0)=0.5，AdaLN-Zero 起手    #
+        #     接近恒等:                                                          #
+        #       self.linear_s = Linear(                                          #
+        #           in_features=c_s, out_features=c_a, initializer="zeros")     #
+        #                                                                        #
+        #   - ``linear_nobias_s``: 零初始化 LinearNoBias(c_s -> c_a) 产出       #
+        #     ``a`` 的加性 shift:                                                #
+        #       self.linear_nobias_s = LinearNoBias(                            #
+        #           in_features=c_s, out_features=c_a, initializer="zeros")     #
+        ##########################################################################
+
         self.layernorm_a = LayerNorm(c_a, create_scale=False, create_offset=False)
         self.layernorm_s = LayerNorm(c_s, create_offset=False)
         self.linear_s = Linear(in_features=c_s, out_features=c_a, initializer="zeros")
         self.linear_nobias_s = LinearNoBias(
             in_features=c_s, out_features=c_a, initializer="zeros"
         )
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(self, a: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
         """
@@ -120,6 +169,45 @@ class Transition(nn.Module):
         super(Transition, self).__init__()
         self.n = n
         self.c_in = c_in
+        ##########################################################################
+        # TODO: Transition (Algorithm 11) — SwiGLU FFN. Four sub-modules:        #
+        #                                                                        #
+        #   - Pre-LayerNorm with default scale + offset over ``c_in``:           #
+        #       self.layernorm1 = LayerNorm(c_in)                                #
+        #                                                                        #
+        #   - Two parallel widening LinearNoBias layers (``c_in -> n*c_in``)     #
+        #     for the SwiGLU gate-and-value branches. Use the ``relu``           #
+        #     initializer because both branches feed into a ReLU-flavoured       #
+        #     nonlinearity (silu * b):                                            #
+        #       self.linear_no_bias_a = LinearNoBias(                            #
+        #           in_features=c_in, out_features=n * c_in, initializer="relu")#
+        #       self.linear_no_bias_b = LinearNoBias(                            #
+        #           in_features=c_in, out_features=n * c_in, initializer="relu")#
+        #                                                                        #
+        #   - Projection back to ``c_in``, zero-initialized so the residual     #
+        #     branch starts as identity:                                         #
+        #       self.linear_no_bias = LinearNoBias(                              #
+        #           in_features=n * c_in, out_features=c_in,                    #
+        #           initializer="zeros")                                          #
+        #                                                                        #
+        # TODO: Transition (算法 11) —— SwiGLU FFN，四个子模块:                   #
+        #                                                                        #
+        #   - 默认 scale + offset 的 Pre-LayerNorm:                                #
+        #       self.layernorm1 = LayerNorm(c_in)                                #
+        #                                                                        #
+        #   - 两路并行扩宽线性层 (``c_in -> n*c_in``)，对应 SwiGLU 的             #
+        #     gate / value 分支。两路都用 ``relu`` 初始化:                         #
+        #       self.linear_no_bias_a = LinearNoBias(                            #
+        #           in_features=c_in, out_features=n * c_in, initializer="relu")#
+        #       self.linear_no_bias_b = LinearNoBias(                            #
+        #           in_features=c_in, out_features=n * c_in, initializer="relu")#
+        #                                                                        #
+        #   - 投回 ``c_in`` 的输出层，零初始化使残差从恒等开始:                     #
+        #       self.linear_no_bias = LinearNoBias(                              #
+        #           in_features=n * c_in, out_features=c_in,                    #
+        #           initializer="zeros")                                          #
+        ##########################################################################
+
         self.layernorm1 = LayerNorm(c_in)
         self.linear_no_bias_a = LinearNoBias(
             in_features=c_in, out_features=n * c_in, initializer="relu"
@@ -130,6 +218,10 @@ class Transition(nn.Module):
         self.linear_no_bias = LinearNoBias(
             in_features=n * c_in, out_features=c_in, initializer="zeros"
         )
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

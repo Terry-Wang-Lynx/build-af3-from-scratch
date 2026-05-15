@@ -98,12 +98,62 @@ class DiffusionTransformerBlock(nn.Module):
 
         Returns: (a_out, s, z)  — s/z forwarded so they survive checkpointing.
         """
+        ##########################################################################
+        # TODO: Algorithm 23 lines 2-3 — one DiffusionTransformer block.         #
+        #                                                                        #
+        #   Step 1 — Run the AttentionPairBias sub-block. ``has_s=True`` so it  #
+        #     uses AdaLN + adaLN-Zero output gate internally; we wrap its       #
+        #     output in DropPath (stochastic depth) and add as residual:        #
+        #       attn_out = self.drop_path(                                       #
+        #           self.attention_pair_bias(                                   #
+        #               a=a, s=s, z=z,                                          #
+        #               n_queries=n_queries, n_keys=n_keys,                     #
+        #           )                                                            #
+        #       )                                                                #
+        #       attn_out = attn_out + a                                          #
+        #                                                                        #
+        #   Step 2 — Run the ConditionedTransitionBlock (Algorithm 25) on the   #
+        #     post-attention state, again with DropPath and residual:           #
+        #       ff_out = self.drop_path(                                         #
+        #           self.conditioned_transition_block(a=attn_out, s=s)          #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 3 — Return ``(a, s, z)`` so ``s`` and ``z`` survive activation #
+        #     checkpointing (only ``a`` is updated):                             #
+        #       return ff_out + attn_out, s, z                                   #
+        #                                                                        #
+        # TODO: 算法 23 第 2-3 行 —— DiffusionTransformer 的一个 block。           #
+        #                                                                        #
+        #   步骤 1 — 跑 AttentionPairBias 子块。``has_s=True`` 自动启用 AdaLN +    #
+        #     adaLN-Zero 输出门；外面包一层 DropPath 后做残差:                     #
+        #       attn_out = self.drop_path(                                       #
+        #           self.attention_pair_bias(                                   #
+        #               a=a, s=s, z=z,                                          #
+        #               n_queries=n_queries, n_keys=n_keys,                     #
+        #           )                                                            #
+        #       )                                                                #
+        #       attn_out = attn_out + a                                          #
+        #                                                                        #
+        #   步骤 2 — 跑 ConditionedTransitionBlock (算法 25)，                     #
+        #     同样 DropPath + 残差:                                                #
+        #       ff_out = self.drop_path(                                         #
+        #           self.conditioned_transition_block(a=attn_out, s=s)          #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 3 — 返回 ``(a, s, z)``，方便激活检查点存活 (只 ``a`` 更新):        #
+        #       return ff_out + attn_out, s, z                                   #
+        ##########################################################################
+
         attn_out = self.drop_path(
             self.attention_pair_bias(a=a, s=s, z=z, n_queries=n_queries, n_keys=n_keys)
         )
         attn_out = attn_out + a
         ff_out = self.drop_path(self.conditioned_transition_block(a=attn_out, s=s))
         return ff_out + attn_out, s, z
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
 
 
@@ -174,9 +224,34 @@ class DiffusionTransformer(nn.Module):
         Returns:
             [..., N, c_a]
         """
+        ##########################################################################
+        # TODO: Algorithm 23 — stacked DiffusionTransformer blocks. Forwards    #
+        #   ``s`` / ``z`` unchanged between blocks so they survive activation   #
+        #   checkpointing; only ``a`` accumulates updates:                       #
+        #       for block in self.blocks:                                        #
+        #           a, s, z = block(                                             #
+        #               a, s, z,                                                 #
+        #               n_queries=n_queries, n_keys=n_keys,                     #
+        #           )                                                            #
+        #       return a                                                         #
+        #                                                                        #
+        # TODO: 算法 23 —— 堆叠 DiffusionTransformer blocks。``s`` / ``z`` 在     #
+        #   block 之间原样透传 (为方便激活检查点)，只更新 ``a``:                   #
+        #       for block in self.blocks:                                        #
+        #           a, s, z = block(                                             #
+        #               a, s, z,                                                 #
+        #               n_queries=n_queries, n_keys=n_keys,                     #
+        #           )                                                            #
+        #       return a                                                         #
+        ##########################################################################
+
         for block in self.blocks:
             a, s, z = block(a, s, z, n_queries=n_queries, n_keys=n_keys)
         return a
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
 
 
@@ -220,9 +295,53 @@ class ConditionedTransitionBlock(nn.Module):
             torch.Tensor: the updated a from ConditionedTransitionBlock
                 [..., N, c_a]
         """
+        ##########################################################################
+        # TODO: Algorithm 25 — ConditionedTransitionBlock (SwiGLU FFN with     #
+        #   adaLN-Zero output gate).                                            #
+        #                                                                        #
+        #   Step 1 — Adaptive LayerNorm modulates ``a`` by ``s`` (Alg 26):       #
+        #       a = self.adaln(a, s)                # [..., N, c_a]              #
+        #                                                                        #
+        #   Step 2 — SwiGLU gate-value FFN: two parallel widening linears       #
+        #     (``relu`` init, no bias) feed a silu * b gate, output stays at    #
+        #     ``n * c_a`` width:                                                 #
+        #       b = F.silu(self.linear_nobias_a1(a)) * self.linear_nobias_a2(a)  #
+        #                                       # [..., N, n*c_a]                #
+        #                                                                        #
+        #   Step 3 — adaLN-Zero output gate (from Peebles & Xie 2023):          #
+        #     a sigmoid gate driven by ``s`` (``linear_s`` is BiasInitLinear    #
+        #     with bias=-2 -> gate ≈ 0.12 at init), multiplied with the         #
+        #     projected FFN output:                                              #
+        #       a = torch.sigmoid(self.linear_s(s)) * self.linear_nobias_b(b)    #
+        #                                       # [..., N, c_a]                  #
+        #   Return ``a``.                                                        #
+        #                                                                        #
+        # TODO: 算法 25 —— ConditionedTransitionBlock (带 adaLN-Zero 输出门的     #
+        #   SwiGLU FFN)。                                                        #
+        #                                                                        #
+        #   步骤 1 — Adaptive LayerNorm 用 ``s`` 调制 ``a`` (算法 26):             #
+        #       a = self.adaln(a, s)                # [..., N, c_a]              #
+        #                                                                        #
+        #   步骤 2 — SwiGLU gate-value FFN: 两路 relu-init 扩宽线性层 (无 bias)、 #
+        #     silu * b 门，宽度 ``n * c_a``:                                       #
+        #       b = F.silu(self.linear_nobias_a1(a)) * self.linear_nobias_a2(a)  #
+        #                                       # [..., N, n*c_a]                #
+        #                                                                        #
+        #   步骤 3 — adaLN-Zero 输出门 (Peebles & Xie 2023)：由 ``s`` 驱动的       #
+        #     sigmoid 门 (``linear_s`` 是 BiasInitLinear，bias=-2，初始 ≈0.12)   #
+        #     乘以投回 c_a 的 FFN 输出:                                            #
+        #       a = torch.sigmoid(self.linear_s(s)) * self.linear_nobias_b(b)    #
+        #                                       # [..., N, c_a]                  #
+        #   返回 ``a``。                                                          #
+        ##########################################################################
+
         a = self.adaln(a, s)
         b = F.silu((self.linear_nobias_a1(a))) * self.linear_nobias_a2(a)
         # Output projection (from adaLN-Zero [27])
         a = torch.sigmoid(self.linear_s(s)) * self.linear_nobias_b(b)
         return a
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 

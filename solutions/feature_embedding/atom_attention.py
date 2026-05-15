@@ -92,12 +92,44 @@ class AtomTransformer(nn.Module):
         Returns:
             [..., N_atom, c_atom]
         """
+        ##########################################################################
+        # TODO: AtomTransformer (Algorithm 7) is just a DiffusionTransformer    #
+        #   restricted to the local windowed-attention path. The atom-pair      #
+        #   tensor ``p`` arrives in dense-trunk form, so check the trunk width   #
+        #   matches the configured window sizes, then delegate to the           #
+        #   underlying transformer telling it to use local attention:           #
+        #                                                                        #
+        #       _, n_queries, n_keys = p.shape[-4:-1]                            #
+        #       assert n_queries == self.n_queries                               #
+        #       assert n_keys    == self.n_keys                                  #
+        #       return self.diffusion_transformer(                               #
+        #           a=q, s=c, z=p,                                               #
+        #           n_queries=self.n_queries, n_keys=self.n_keys,                #
+        #       )                                                                #
+        #                                                                        #
+        # TODO: AtomTransformer (算法 7) 就是把 DiffusionTransformer 限制到局部   #
+        #   窗口注意力路径。pair 张量 ``p`` 已是 dense-trunk 形状，先校验 trunk     #
+        #   宽度与窗口配置一致，再透传给底层 transformer 并指明启用局部注意力:    #
+        #                                                                        #
+        #       _, n_queries, n_keys = p.shape[-4:-1]                            #
+        #       assert n_queries == self.n_queries                               #
+        #       assert n_keys    == self.n_keys                                  #
+        #       return self.diffusion_transformer(                               #
+        #           a=q, s=c, z=p,                                               #
+        #           n_queries=self.n_queries, n_keys=self.n_keys,                #
+        #       )                                                                #
+        ##########################################################################
+
         _, n_queries, n_keys = p.shape[-4:-1]
         assert n_queries == self.n_queries
         assert n_keys == self.n_keys
         return self.diffusion_transformer(
             a=q, s=c, z=p, n_queries=self.n_queries, n_keys=self.n_keys
         )
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
 
 
@@ -252,6 +284,117 @@ class AtomAttentionEncoder(nn.Module):
         reused across all diffusion timesteps.
         """
         del inplace_safe
+        ##########################################################################
+        # TODO: Algorithm 5 lines 1-6 — time-invariant atom-single (c_l) and    #
+        #   atom-pair (p_lm) conditioning. These depend only on reference       #
+        #   geometry, so we compute them once and cache across diffusion steps. #
+        #                                                                        #
+        #   Step 1 — Read shapes and start c_l from reference position +         #
+        #     arcsinh-clamped formal charge (arcsinh is symmetric in sign and   #
+        #     keeps the distribution tame):                                     #
+        #       batch_shape = ref_pos.shape[:-2]                                 #
+        #       N_atom      = ref_pos.shape[-2]                                  #
+        #       c_l = (                                                          #
+        #           self.linear_no_bias_ref_pos(ref_pos)                         #
+        #           + self.linear_no_bias_ref_charge(                            #
+        #               torch.arcsinh(ref_charge).reshape(                       #
+        #                   *batch_shape, N_atom, 1))                            #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 2 — Fold the categorical features (ref_mask, ref_element       #
+        #     one-hot 128-dim, ref_atom_name_chars 4*64-dim) into one wide      #
+        #     concat, project to c_atom, and add. Cast the concat to c_l.dtype  #
+        #     because element/atom_name_chars may be int64:                     #
+        #       c_l = c_l + self.linear_no_bias_f(                               #
+        #           torch.cat(                                                   #
+        #               [                                                        #
+        #                   ref_mask.reshape(*batch_shape, N_atom, 1),          #
+        #                   ref_element.reshape(*batch_shape, N_atom, 128),     #
+        #                   ref_atom_name_chars.reshape(                        #
+        #                       *batch_shape, N_atom, 4 * 64),                  #
+        #               ],                                                       #
+        #               dim=-1,                                                  #
+        #           ).to(c_l.dtype)                                              #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 3 — Mask invalid atoms to zero:                                  #
+        #       c_l = c_l * ref_mask.reshape(*batch_shape, N_atom, 1)            #
+        #                                                                        #
+        #   Step 4 — Build the dense-trunk atom-pair tensor p_lm from the       #
+        #     pre-computed per-pair distance vectors ``d_lm`` and validity      #
+        #     ``v_lm``. The padding-trunk mask zeros pairs outside the local    #
+        #     window:                                                            #
+        #       # [..., n_blocks, n_queries, n_keys, C_atompair]                 #
+        #       p_lm = (self.linear_no_bias_d(d_lm) * v_lm)                     #
+        #              * pad_info["mask_trunked"].unsqueeze(-1)                  #
+        #       p_lm = p_lm + self.linear_no_bias_invd(                         #
+        #           1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))               #
+        #       ) * v_lm                                                         #
+        #       p_lm = p_lm + self.linear_no_bias_v(v_lm.to(p_lm.dtype))        #
+        #                                                                        #
+        #   Step 5 — When called inside the diffusion loop (``r_l is not None``)#
+        #     also broadcast the trunk pair feature ``z`` into the dense-trunk  #
+        #     layout and add. We add a leading length-1 axis to p_lm so it      #
+        #     broadcasts with the sample axis carried by ``r_l``:                #
+        #       if r_l is not None:                                              #
+        #           assert z is not None                                         #
+        #           p_lm = p_lm.unsqueeze(-5) + broadcast_token_to_local_atom_pair(#
+        #               z_token=self.linear_no_bias_z(self.layernorm_z(z)),     #
+        #               atom_to_token_idx=atom_to_token_idx,                    #
+        #               n_queries=self.n_queries,                               #
+        #               n_keys=self.n_keys,                                     #
+        #               compute_mask=False,                                     #
+        #           )[0]                                                         #
+        #   Return ``(p_lm, c_l)``.                                              #
+        #                                                                        #
+        # TODO: 算法 5 第 1-6 行 —— 与时间无关的原子 single (c_l) 和原子 pair     #
+        #   (p_lm) 条件。它们只依赖参考几何，可缓存复用。                          #
+        #                                                                        #
+        #   步骤 1 — 形状 + 由 ref_pos 与 arcsinh 后的 formal charge 起手 c_l:     #
+        #       batch_shape = ref_pos.shape[:-2]                                 #
+        #       N_atom      = ref_pos.shape[-2]                                  #
+        #       c_l = (                                                          #
+        #           self.linear_no_bias_ref_pos(ref_pos)                         #
+        #           + self.linear_no_bias_ref_charge(                            #
+        #               torch.arcsinh(ref_charge).reshape(                       #
+        #                   *batch_shape, N_atom, 1))                            #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 2 — 把 (ref_mask, ref_element one-hot 128 维,                    #
+        #     ref_atom_name_chars 4*64 维) 拼宽，投到 c_atom 加到 c_l。           #
+        #     concat 后转到 c_l.dtype (element 等可能是 int64):                    #
+        #       c_l = c_l + self.linear_no_bias_f(                               #
+        #           torch.cat([...], dim=-1).to(c_l.dtype)                      #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 3 — 用 ref_mask 把无效原子置零:                                    #
+        #       c_l = c_l * ref_mask.reshape(*batch_shape, N_atom, 1)            #
+        #                                                                        #
+        #   步骤 4 — 由预算好的 per-pair 距离向量 ``d_lm`` 和有效性 ``v_lm``      #
+        #     构建 dense-trunk 原子 pair 张量 p_lm，``mask_trunked`` 把窗口外       #
+        #     置零:                                                                #
+        #       p_lm = (self.linear_no_bias_d(d_lm) * v_lm)                     #
+        #              * pad_info["mask_trunked"].unsqueeze(-1)                  #
+        #       p_lm = p_lm + self.linear_no_bias_invd(                         #
+        #           1 / (1 + (d_lm**2).sum(dim=-1, keepdim=True))               #
+        #       ) * v_lm                                                         #
+        #       p_lm = p_lm + self.linear_no_bias_v(v_lm.to(p_lm.dtype))        #
+        #                                                                        #
+        #   步骤 5 — 在扩散循环内 (``r_l is not None``) 把主干 pair ``z`` 广播到   #
+        #     dense-trunk 上叠加。在 p_lm 前插入一个长度 1 的轴，使其与 r_l        #
+        #     携带的样本轴对齐:                                                    #
+        #       if r_l is not None:                                              #
+        #           assert z is not None                                         #
+        #           p_lm = p_lm.unsqueeze(-5) + broadcast_token_to_local_atom_pair(#
+        #               z_token=self.linear_no_bias_z(self.layernorm_z(z)),     #
+        #               atom_to_token_idx=atom_to_token_idx,                    #
+        #               n_queries=self.n_queries,                               #
+        #               n_keys=self.n_keys,                                     #
+        #               compute_mask=False,                                     #
+        #           )[0]                                                         #
+        #   返回 ``(p_lm, c_l)``。                                                #
+        ##########################################################################
+
         batch_shape = ref_pos.shape[:-2]
         N_atom = ref_pos.shape[-2]
         c_l = self.linear_no_bias_ref_pos(ref_pos) + self.linear_no_bias_ref_charge(
@@ -287,6 +430,10 @@ class AtomAttentionEncoder(nn.Module):
                 compute_mask=False,
             )[0]
         return p_lm, c_l
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(
         self,

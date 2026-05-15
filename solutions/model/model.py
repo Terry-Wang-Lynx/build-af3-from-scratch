@@ -523,6 +523,71 @@ class Protenix(nn.Module):
         accepted for signature compatibility and ignored.
         仅支持 ``mode='inference'``；label_* 参数仅为签名兼容，运行时忽略。
         """
+        ##########################################################################
+        # TODO: Algorithm 1 — Protenix top-level forward (inference only).      #
+        #                                                                        #
+        #   Step 1 — Inference-only guard. Training is intentionally not        #
+        #     supported in this educational fork: training would require        #
+        #     loss heads / data pipelines that the project doesn't ship:        #
+        #       assert mode == "inference", \                                    #
+        #           "only `mode='inference'` is supported."                      #
+        #       del label_full_dict, label_dict                                  #
+        #                                                                        #
+        #   Step 2 — Pre-compute the relative-position feature ``relp`` once    #
+        #     (Algorithm 3) and stash it into the input dict. Then run any     #
+        #     other input-feature finalization (one-hots, derived masks, etc.):#
+        #       input_feature_dict = self.relative_position_encoding            #
+        #                                .generate_relp(input_feature_dict)     #
+        #       input_feature_dict = update_input_feature_dict(                  #
+        #           input_feature_dict)                                          #
+        #                                                                        #
+        #   Step 3 — Delegate to the main inference loop. It runs the trunk     #
+        #     (get_pairformer_output: Alg 1 lines 1-13), the diffusion sampler #
+        #     (Alg 18), and the confidence + distogram heads (Alg 31 + Alg 1   #
+        #     line 17):                                                         #
+        #       pred_dict, log_dict, time_tracker = self.main_inference_loop(  #
+        #           input_feature_dict=input_feature_dict,                      #
+        #           label_dict=None,                                            #
+        #           N_cycle=self.N_cycle,                                       #
+        #           mode=mode,                                                  #
+        #       )                                                               #
+        #       log_dict.update({"time": time_tracker})                         #
+        #                                                                        #
+        #   Step 4 — Return ``(pred_dict, None, log_dict)``. The ``None`` slot  #
+        #     is for the training-mode label-aligned output (used by the loss  #
+        #     in upstream Protenix; we don't compute it here):                  #
+        #       return pred_dict, None, log_dict                                #
+        #                                                                        #
+        # TODO: 算法 1 —— Protenix 顶层 forward (仅推理)。                        #
+        #                                                                        #
+        #   步骤 1 — 仅推理守卫。教学版不带训练管线 (loss / 数据流水线):          #
+        #       assert mode == "inference", \                                    #
+        #           "only `mode='inference'` is supported."                      #
+        #       del label_full_dict, label_dict                                  #
+        #                                                                        #
+        #   步骤 2 — 预算相对位置特征 ``relp`` (算法 3) 并塞进 input_feature_dict;#
+        #     再做其它输入特征收尾 (one-hot、派生 mask 等):                        #
+        #       input_feature_dict = self.relative_position_encoding            #
+        #                                .generate_relp(input_feature_dict)     #
+        #       input_feature_dict = update_input_feature_dict(                  #
+        #           input_feature_dict)                                          #
+        #                                                                        #
+        #   步骤 3 — 把流程委托给 main_inference_loop。它依次跑主干               #
+        #     (get_pairformer_output: 算法 1 第 1-13 行)、扩散采样 (算法 18)、    #
+        #     置信度 + distogram 头 (算法 31 + 算法 1 第 17 行):                  #
+        #       pred_dict, log_dict, time_tracker = self.main_inference_loop(  #
+        #           input_feature_dict=input_feature_dict,                      #
+        #           label_dict=None,                                            #
+        #           N_cycle=self.N_cycle,                                       #
+        #           mode=mode,                                                  #
+        #       )                                                               #
+        #       log_dict.update({"time": time_tracker})                         #
+        #                                                                        #
+        #   步骤 4 — 返回 ``(pred_dict, None, log_dict)``。``None`` 是为训练时的   #
+        #     label-aligned 输出留位 (此处不计算):                                #
+        #       return pred_dict, None, log_dict                                #
+        ##########################################################################
+
         assert mode == "inference", "only `mode='inference'` is supported."
         del label_full_dict, label_dict
 
@@ -538,3 +603,7 @@ class Protenix(nn.Module):
         log_dict.update({"time": time_tracker})
 
         return pred_dict, None, log_dict
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################

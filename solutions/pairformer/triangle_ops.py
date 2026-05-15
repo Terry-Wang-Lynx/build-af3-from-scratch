@@ -443,13 +443,89 @@ class OuterProductMean(nn.Module):
         self.c_z = c_z
         self.c_hidden = c_hidden
         self.eps = eps
+        ##########################################################################
+        # TODO: OuterProductMean (Algorithm 10) — three sub-modules:             #
+        #                                                                        #
+        #   - Pre-LayerNorm on the MSA channel:                                  #
+        #       self.layer_norm = LayerNorm(c_m)                                #
+        #                                                                        #
+        #   - Two parallel projections from MSA channel ``c_m`` to ``c_hidden``  #
+        #     (no bias). Their outer product fills the c_hidden x c_hidden       #
+        #     block:                                                              #
+        #       self.linear_1 = OpenfoldLinear(c_m, c_hidden, bias=False)        #
+        #       self.linear_2 = OpenfoldLinear(c_m, c_hidden, bias=False)        #
+        #                                                                        #
+        #   - Output projection from the flattened c_hidden**2 block back to    #
+        #     ``c_z``, "final" init (zero-init) so the pair update starts as a  #
+        #     no-op:                                                              #
+        #       self.linear_out = OpenfoldLinear(                                #
+        #           c_hidden**2, c_z, init="final")                              #
+        #                                                                        #
+        # TODO: OuterProductMean (算法 10) —— 三个子模块:                          #
+        #                                                                        #
+        #   - MSA 通道维 Pre-LayerNorm:                                            #
+        #       self.layer_norm = LayerNorm(c_m)                                #
+        #                                                                        #
+        #   - 两路 MSA 通道投影 (c_m -> c_hidden，无 bias)。其外积构成              #
+        #     c_hidden x c_hidden 的块:                                            #
+        #       self.linear_1 = OpenfoldLinear(c_m, c_hidden, bias=False)        #
+        #       self.linear_2 = OpenfoldLinear(c_m, c_hidden, bias=False)        #
+        #                                                                        #
+        #   - 输出投影：把展平后的 c_hidden**2 投回 ``c_z``。"final" 初始化          #
+        #     (零初始化)，使 pair 更新从恒等开始:                                    #
+        #       self.linear_out = OpenfoldLinear(                                #
+        #           c_hidden**2, c_z, init="final")                              #
+        ##########################################################################
 
         self.layer_norm = LayerNorm(c_m)
         self.linear_1 = OpenfoldLinear(c_m, c_hidden, bias=False)
         self.linear_2 = OpenfoldLinear(c_m, c_hidden, bias=False)
         self.linear_out = OpenfoldLinear(c_hidden**2, c_z, init="final")
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
+
     def _opm(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        ##########################################################################
+        # TODO: The actual outer-product (without the mean — that division by    #
+        #   the mask count is applied by the caller). Inputs have already been   #
+        #   transposed to [*, N_res, N_seq, c_hidden].                            #
+        #                                                                        #
+        #   Step 1 — Outer product over the c_hidden channel, summing over the  #
+        #     MSA axis ``a``:                                                    #
+        #       # 'bac, dae -> bdce':                                            #
+        #       #   outer[*, i, j, c, d] = sum_s a[*, i, s, c] * b[*, j, s, d]   #
+        #       outer = torch.einsum("...bac,...dae->...bdce", a, b)             #
+        #                                       # [*, N_res, N_res, C, C]       #
+        #                                                                        #
+        #   Step 2 — Flatten the c_hidden x c_hidden block to a single feature  #
+        #     dim:                                                                #
+        #       outer = outer.reshape(outer.shape[:-2] + (-1,))                  #
+        #                                       # [*, N_res, N_res, C*C]        #
+        #                                                                        #
+        #   Step 3 — Project to ``c_z``:                                          #
+        #       outer = self.linear_out(outer)   # [*, N_res, N_res, c_z]       #
+        #   Return ``outer``.                                                     #
+        #                                                                        #
+        # TODO: 外积本身 (均值在调用方按 mask 计数除)。输入已被转置成               #
+        #   [*, N_res, N_seq, c_hidden]。                                          #
+        #                                                                        #
+        #   步骤 1 — 沿通道做外积，沿 MSA 轴 ``a`` 求和:                            #
+        #       # 'bac, dae -> bdce':                                            #
+        #       #   outer[*, i, j, c, d] = sum_s a[*, i, s, c] * b[*, j, s, d]   #
+        #       outer = torch.einsum("...bac,...dae->...bdce", a, b)             #
+        #                                       # [*, N_res, N_res, C, C]       #
+        #                                                                        #
+        #   步骤 2 — 把 c_hidden x c_hidden 块展平成单通道:                         #
+        #       outer = outer.reshape(outer.shape[:-2] + (-1,))                  #
+        #                                       # [*, N_res, N_res, C*C]        #
+        #                                                                        #
+        #   步骤 3 — 投到 ``c_z``:                                                 #
+        #       outer = self.linear_out(outer)   # [*, N_res, N_res, c_z]       #
+        #   返回 ``outer``。                                                       #
+        ##########################################################################
+
         # [*, N_res, N_res, C, C]
         outer = torch.einsum("...bac,...dae->...bdce", a, b)
 
@@ -460,6 +536,10 @@ class OuterProductMean(nn.Module):
         outer = self.linear_out(outer)
 
         return outer
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     @torch.jit.ignore
     def _chunk(self, a: torch.Tensor, b: torch.Tensor, chunk_size: int) -> torch.Tensor:

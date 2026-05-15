@@ -48,6 +48,70 @@ class InputFeatureEmbedder(nn.Module):
         self.c_atom = c_atom
         self.c_atompair = c_atompair
         self.c_token = c_token
+        ##########################################################################
+        # TODO: InputFeatureEmbedder (Algorithm 2) — wire up:                    #
+        #                                                                        #
+        #   Step 1 — Inner atom encoder (Algorithm 5) configured WITHOUT       #
+        #     coordinates (we're producing the trunk single from atom features  #
+        #     alone here):                                                       #
+        #       self.atom_attention_encoder = AtomAttentionEncoder(             #
+        #           c_atom=c_atom,                                              #
+        #           c_atompair=c_atompair,                                      #
+        #           c_token=c_token,                                            #
+        #           has_coords=False,                                            #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 2 — Optional ESM bypass. When the PLM-variant ckpt is in use,  #
+        #     we project a precomputed ESM embedding to the same output width   #
+        #     as ``s_inputs`` and add it. Zero-initialise the projection so      #
+        #     non-ESM checkpoints behave identically:                           #
+        #       self.esm_configs = {                                             #
+        #           "enable":        esm_configs.get("enable", False),          #
+        #           "embedding_dim": esm_configs.get("embedding_dim", 2560),    #
+        #       }                                                                #
+        #       if self.esm_configs["enable"]:                                   #
+        #           self.linear_esm = LinearNoBias(                              #
+        #               self.esm_configs["embedding_dim"],                       #
+        #               self.c_token + 32 + 32 + 1,                              #
+        #           )                                                            #
+        #           nn.init.zeros_(self.linear_esm.weight)                       #
+        #                                                                        #
+        #   Step 3 — Declare which per-token features feed the cat in forward.  #
+        #     Order and widths must match exactly: restype 32 + profile 32 +    #
+        #     deletion_mean 1:                                                  #
+        #       self.input_feature = {                                           #
+        #           "restype": 32, "profile": 32, "deletion_mean": 1}            #
+        #                                                                        #
+        # TODO: InputFeatureEmbedder (算法 2) —— 装配:                            #
+        #                                                                        #
+        #   步骤 1 — 内部原子编码器 (算法 5)，**不带坐标** (这里只用原子特征产生   #
+        #     trunk single):                                                     #
+        #       self.atom_attention_encoder = AtomAttentionEncoder(             #
+        #           c_atom=c_atom,                                              #
+        #           c_atompair=c_atompair,                                      #
+        #           c_token=c_token,                                            #
+        #           has_coords=False,                                            #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 2 — 可选 ESM 旁路 (PLM 变体的 ckpt 用)。投到与 ``s_inputs`` 同宽   #
+        #     再加上去。零初始化使非-PLM ckpt 完全不受影响:                        #
+        #       self.esm_configs = {                                             #
+        #           "enable":        esm_configs.get("enable", False),          #
+        #           "embedding_dim": esm_configs.get("embedding_dim", 2560),    #
+        #       }                                                                #
+        #       if self.esm_configs["enable"]:                                   #
+        #           self.linear_esm = LinearNoBias(                              #
+        #               self.esm_configs["embedding_dim"],                       #
+        #               self.c_token + 32 + 32 + 1,                              #
+        #           )                                                            #
+        #           nn.init.zeros_(self.linear_esm.weight)                       #
+        #                                                                        #
+        #   步骤 3 — 声明 forward 里要 cat 的每 token 特征。顺序和宽度必须严格       #
+        #     一致: restype 32 + profile 32 + deletion_mean 1:                   #
+        #       self.input_feature = {                                           #
+        #           "restype": 32, "profile": 32, "deletion_mean": 1}            #
+        ##########################################################################
+
         self.atom_attention_encoder = AtomAttentionEncoder(
             c_atom=c_atom,
             c_atompair=c_atompair,
@@ -68,6 +132,10 @@ class InputFeatureEmbedder(nn.Module):
 
         # Line2
         self.input_feature = {"restype": 32, "profile": 32, "deletion_mean": 1}
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(
         self,

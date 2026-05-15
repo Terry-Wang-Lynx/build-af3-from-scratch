@@ -58,6 +58,78 @@ def _attention(
     Returns:
         torch.Tensor: output of tensor [..., n_q, d]
     """
+    ##########################################################################
+    # TODO: Scaled dot-product attention — the math heart of every attention #
+    #   block. Two compute paths: the efficient                              #
+    #   ``F.scaled_dot_product_attention`` (kernel-fused), and an explicit   #
+    #   matmul + softmax fallback.                                            #
+    #                                                                        #
+    #   Step 0 — Sanity check + upcast to fp32 for numerical stability:      #
+    #       assert k.shape == v.shape                                        #
+    #       input_dtype = q.dtype                                            #
+    #       q = q.to(dtype=torch.float32)                                    #
+    #       k = k.to(dtype=torch.float32)                                    #
+    #       if attn_bias is not None:                                        #
+    #           attn_bias = attn_bias.to(dtype=torch.float32)                #
+    #                                                                        #
+    #   Step 1 — Efficient path. The caller has already scaled Q by          #
+    #     1/sqrt(d_head), so pass scale=1.0:                                  #
+    #       if use_efficient_implementation:                                  #
+    #           return F.scaled_dot_product_attention(                        #
+    #               query=q, key=k, value=v,                                  #
+    #               attn_mask=attn_bias, scale=1.0,                           #
+    #           )                                                             #
+    #                                                                        #
+    #   Step 2 — Explicit math path under autocast(False):                   #
+    #     with torch.amp.autocast("cuda", enabled=False):                     #
+    #         k = k.transpose(-1, -2)              # [..., d, n_kv]          #
+    #         attn_weights = q @ k                 # [..., n_q, n_kv]        #
+    #         if attn_bias is not None:                                       #
+    #             if inplace_safe:                                            #
+    #                 attn_weights += attn_bias                               #
+    #             else:                                                       #
+    #                 attn_weights = attn_weights + attn_bias                 #
+    #         attn_weights = F.softmax(attn_weights, dim=-1)                  #
+    #                                                                        #
+    #   Step 3 — Cast weights back, weighted-sum across keys:                 #
+    #     attn_output = attn_weights.to(dtype=input_dtype) @ v               #
+    #     return attn_output                                                  #
+    #                                                                        #
+    # TODO: 缩放点积注意力 —— 所有 attention 块的数学核心。两条路径:           #
+    #   高效路径 ``F.scaled_dot_product_attention`` (内核融合)；               #
+    #   显式 matmul + softmax 路径 (清晰可移植)。                              #
+    #                                                                        #
+    #   步骤 0 — 形状校验 + 数值稳定升 fp32:                                    #
+    #       assert k.shape == v.shape                                        #
+    #       input_dtype = q.dtype                                            #
+    #       q = q.to(dtype=torch.float32)                                    #
+    #       k = k.to(dtype=torch.float32)                                    #
+    #       if attn_bias is not None:                                        #
+    #           attn_bias = attn_bias.to(dtype=torch.float32)                #
+    #                                                                        #
+    #   步骤 1 — 高效路径。Q 已在调用前按 1/sqrt(d_head) 缩放，scale=1.0:       #
+    #       if use_efficient_implementation:                                  #
+    #           return F.scaled_dot_product_attention(                        #
+    #               query=q, key=k, value=v,                                  #
+    #               attn_mask=attn_bias, scale=1.0,                           #
+    #           )                                                             #
+    #                                                                        #
+    #   步骤 2 — autocast(False) 下的显式数学路径:                              #
+    #     with torch.amp.autocast("cuda", enabled=False):                     #
+    #         k = k.transpose(-1, -2)              # [..., d, n_kv]          #
+    #         attn_weights = q @ k                 # [..., n_q, n_kv]        #
+    #         if attn_bias is not None:                                       #
+    #             if inplace_safe:                                            #
+    #                 attn_weights += attn_bias                               #
+    #             else:                                                       #
+    #                 attn_weights = attn_weights + attn_bias                 #
+    #         attn_weights = F.softmax(attn_weights, dim=-1)                  #
+    #                                                                        #
+    #   步骤 3 — 把权重转回输入 dtype，沿 key 维加权和:                          #
+    #     attn_output = attn_weights.to(dtype=input_dtype) @ v               #
+    #     return attn_output                                                  #
+    ##########################################################################
+
     assert k.shape == v.shape
 
     # Upcast to compute attn_weights
@@ -97,6 +169,10 @@ def _attention(
     attn_output = attn_weights.to(dtype=input_dtype) @ v
 
     return attn_output
+
+    ##########################################################################
+    #               END OF YOUR CODE                                         #
+    ##########################################################################
 
 
 class Attention(nn.Module):
@@ -240,6 +316,61 @@ class Attention(nn.Module):
             tuple[torch.Tensor, torch.Tensor, torch.Tensor]: the return q/k/v
                 # [..., H, Q/K/V, C_hidden]
         """
+        ##########################################################################
+        # TODO: Q / K / V preparation for multi-head attention.                  #
+        #                                                                        #
+        #   Step 1 — Project from token features into the head-fused hidden     #
+        #     width ``H * C_hidden``. Q comes from ``q_x`` (cross-attention     #
+        #     query), K and V from ``kv_x`` (cross-attention key/value; for     #
+        #     self-attention the caller passes the same tensor twice):          #
+        #       q = self.linear_q(q_x)        # [*, Q,   H*C_hidden]            #
+        #       k = self.linear_k(kv_x)       # [*, K,   H*C_hidden]            #
+        #       v = self.linear_v(kv_x)       # [*, V=K, H*C_hidden]            #
+        #                                                                        #
+        #   Step 2 — Split the trailing head dim:                                #
+        #       q = q.view(q.shape[:-1] + (self.num_heads, -1))                 #
+        #       k = k.view(k.shape[:-1] + (self.num_heads, -1))                 #
+        #       v = v.view(v.shape[:-1] + (self.num_heads, -1))                 #
+        #                                                                        #
+        #   Step 3 — Move the head dim ahead of the token dim so attention      #
+        #     sums over the right axis:                                          #
+        #       q = q.transpose(-2, -3)       # [*, H, Q,   C_hidden]           #
+        #       k = k.transpose(-2, -3)       # [*, H, K,   C_hidden]           #
+        #       v = v.transpose(-2, -3)       # [*, H, V=K, C_hidden]           #
+        #                                                                        #
+        #   Step 4 — Scale Q by 1/sqrt(c_hidden) ahead of the dot product so    #
+        #     the actual attention math can pass scale=1.0:                     #
+        #       if apply_scale:                                                  #
+        #           q = q / math.sqrt(self.c_hidden)                            #
+        #                                                                        #
+        #   Return ``(q, k, v)``.                                                #
+        #                                                                        #
+        # TODO: 为多头注意力准备 Q / K / V。                                      #
+        #                                                                        #
+        #   步骤 1 — 把 token 特征投到融合了头维的隐藏宽度 ``H * C_hidden``。     #
+        #     Q 来自 ``q_x``，K / V 来自 ``kv_x`` (自注意力时调用方传同一张量):    #
+        #       q = self.linear_q(q_x)        # [*, Q,   H*C_hidden]            #
+        #       k = self.linear_k(kv_x)       # [*, K,   H*C_hidden]            #
+        #       v = self.linear_v(kv_x)       # [*, V=K, H*C_hidden]            #
+        #                                                                        #
+        #   步骤 2 — 拆出头维:                                                     #
+        #       q = q.view(q.shape[:-1] + (self.num_heads, -1))                 #
+        #       k = k.view(k.shape[:-1] + (self.num_heads, -1))                 #
+        #       v = v.view(v.shape[:-1] + (self.num_heads, -1))                 #
+        #                                                                        #
+        #   步骤 3 — 把头维移到 token 维之前 (注意力沿正确轴求和):                  #
+        #       q = q.transpose(-2, -3)       # [*, H, Q,   C_hidden]           #
+        #       k = k.transpose(-2, -3)       # [*, H, K,   C_hidden]           #
+        #       v = v.transpose(-2, -3)       # [*, H, V=K, C_hidden]           #
+        #                                                                        #
+        #   步骤 4 — 提前用 1/sqrt(c_hidden) 缩放 Q (下游 _attention 才能传      #
+        #     scale=1.0):                                                       #
+        #       if apply_scale:                                                  #
+        #           q = q / math.sqrt(self.c_hidden)                            #
+        #                                                                        #
+        #   返回 ``(q, k, v)``。                                                  #
+        ##########################################################################
+
         # [*, Q/K/V, H * C_hidden]
         q = self.linear_q(q_x)
         k = self.linear_k(kv_x)
@@ -260,6 +391,10 @@ class Attention(nn.Module):
 
         return q, k, v
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
+
     def _wrap_up(self, o: torch.Tensor, q_x: torch.Tensor) -> torch.Tensor:
         """
 
@@ -272,6 +407,47 @@ class Attention(nn.Module):
         Returns:
             torch.Tensor: the output of attention
         """
+        ##########################################################################
+        # TODO: Post-attention "wrap up" — optional sigmoid gating + output     #
+        #   projection back to ``c_q``.                                          #
+        #                                                                        #
+        #   Step 1 — Gating (only when ``self.linear_g is not None``,           #
+        #     i.e. ``gating=True``). The gate is sigmoid(linear over the        #
+        #     **original** query ``q_x``, not the attention output), reshaped   #
+        #     per head, then multiplied element-wise:                            #
+        #       if self.linear_g is not None:                                    #
+        #           g = self.sigmoid(self.linear_g(q_x))   # [*, Q, H*C_hidden] #
+        #           g = g.view(g.shape[:-1] + (self.num_heads, -1))             #
+        #                                              # [*, Q, H, C_hidden]    #
+        #           o = o * g                          # element-wise gate      #
+        #                                                                        #
+        #   Step 2 — Flatten the last two dims (head, hidden) back into a       #
+        #     single (H * C_hidden) channel:                                    #
+        #       o = flatten_final_dims(o, num_dims=2)   # [*, Q, H*C_hidden]    #
+        #                                                                        #
+        #   Step 3 — Project to ``c_q`` (the attention input width):            #
+        #       o = self.linear_o(o)                    # [*, Q, c_q]           #
+        #   Return ``o``.                                                        #
+        #                                                                        #
+        # TODO: 注意力后的"收尾" —— 可选 sigmoid 门控 + 输出投影回 ``c_q``。      #
+        #                                                                        #
+        #   步骤 1 — 门控 (仅 ``self.linear_g is not None``，即 ``gating=True``)。 #
+        #     门由 sigmoid(linear over 原始 ``q_x``) 算 (注意是 q_x 而非 attn   #
+        #     输出 o)，reshape 出头维后逐元素相乘:                                #
+        #       if self.linear_g is not None:                                    #
+        #           g = self.sigmoid(self.linear_g(q_x))   # [*, Q, H*C_hidden] #
+        #           g = g.view(g.shape[:-1] + (self.num_heads, -1))             #
+        #                                              # [*, Q, H, C_hidden]    #
+        #           o = o * g                                                   #
+        #                                                                        #
+        #   步骤 2 — 把最后两维 (head, hidden) 展平回单通道 (H * C_hidden):        #
+        #       o = flatten_final_dims(o, num_dims=2)   # [*, Q, H*C_hidden]    #
+        #                                                                        #
+        #   步骤 3 — 投到 ``c_q`` (attention 输入宽度):                            #
+        #       o = self.linear_o(o)                    # [*, Q, c_q]           #
+        #   返回 ``o``。                                                          #
+        ##########################################################################
+
         if self.linear_g is not None:
             g = self.sigmoid(self.linear_g(q_x))
 
@@ -286,6 +462,10 @@ class Attention(nn.Module):
         o = self.linear_o(o)
 
         return o
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(
         self,

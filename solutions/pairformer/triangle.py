@@ -46,6 +46,48 @@ class BaseTriangleMultiplicativeUpdate(nn.Module, ABC):
         self.c_z = c_z
         self.c_hidden = c_hidden
         self._outgoing = _outgoing
+        ##########################################################################
+        # TODO: Common scaffolding for both TriangleMultiplication variants      #
+        #   (outgoing / incoming). Subclasses add ``linear_a_p``, ``linear_a_g``,#
+        #   ``linear_b_p``, ``linear_b_g`` on top.                                #
+        #                                                                        #
+        #   - Output gate (the ``g`` that wraps the projected combined tensor): #
+        #     gating-init (sampled to start near sigmoid(0)≈0.5):                 #
+        #       self.linear_g = OpenfoldLinear(                                  #
+        #           self.c_z, self.c_z, bias=False, init="gating")               #
+        #                                                                        #
+        #   - Output projection (combined hidden -> c_z), "final" init so the   #
+        #     residual update starts as a no-op:                                 #
+        #       self.linear_z = OpenfoldLinear(                                  #
+        #           self.c_hidden, self.c_z, bias=False, init="final")           #
+        #                                                                        #
+        #   - LayerNorms: ``layer_norm_in`` on input (c_z), ``layer_norm_out``  #
+        #     after the einsum combine (c_hidden):                               #
+        #       self.layer_norm_in  = LayerNorm(self.c_z)                       #
+        #       self.layer_norm_out = LayerNorm(self.c_hidden)                  #
+        #                                                                        #
+        #   - Shared sigmoid module:                                             #
+        #       self.sigmoid = nn.Sigmoid()                                      #
+        #                                                                        #
+        # TODO: outgoing / incoming 两种 TriangleMultiplication 共享的脚手架。    #
+        #   子类再附加 ``linear_a_p`` / ``linear_a_g`` / ``linear_b_p`` /         #
+        #   ``linear_b_g``。                                                      #
+        #                                                                        #
+        #   - 输出门 (gating-init，sigmoid(0)≈0.5):                                 #
+        #       self.linear_g = OpenfoldLinear(                                  #
+        #           self.c_z, self.c_z, bias=False, init="gating")               #
+        #                                                                        #
+        #   - 输出投影 (combined hidden -> c_z)，"final" 初始化使残差从恒等开始:    #
+        #       self.linear_z = OpenfoldLinear(                                  #
+        #           self.c_hidden, self.c_z, bias=False, init="final")           #
+        #                                                                        #
+        #   - LayerNorm: 输入侧 (c_z)、einsum 之后侧 (c_hidden):                   #
+        #       self.layer_norm_in  = LayerNorm(self.c_z)                       #
+        #       self.layer_norm_out = LayerNorm(self.c_hidden)                  #
+        #                                                                        #
+        #   - 共享 sigmoid 模块:                                                   #
+        #       self.sigmoid = nn.Sigmoid()                                      #
+        ##########################################################################
 
         self.linear_g = OpenfoldLinear(self.c_z, self.c_z, bias=False, init="gating")
         self.linear_z = OpenfoldLinear(
@@ -57,12 +99,80 @@ class BaseTriangleMultiplicativeUpdate(nn.Module, ABC):
 
         self.sigmoid = nn.Sigmoid()
 
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
+
     def _combine_projections(
         self,
         a: torch.Tensor,
         b: torch.Tensor,
         _inplace_chunk_size: Optional[int] = None,
     ) -> torch.Tensor:
+        ##########################################################################
+        # TODO: Outer-product combine for Triangle Multiplication. The shape    #
+        #   trick: lift the channel dim to position -3 so torch.matmul          #
+        #   contracts over the right residue axis for each variant.             #
+        #                                                                        #
+        #   Inputs ``a`` and ``b`` have shape [*, N, N, c_hidden].               #
+        #                                                                        #
+        #   Step 1 — Permute to expose the channel axis as the head dim,         #
+        #     putting the contracting axis last in ``a`` and as the second-     #
+        #     last in ``b`` for matmul. Outgoing contracts column-of-a with     #
+        #     column-of-b; incoming contracts row-of-a with row-of-b:            #
+        #       if self._outgoing:                                               #
+        #           a = permute_final_dims(a, (2, 0, 1))    # [*, c, N, N]      #
+        #           b = permute_final_dims(b, (2, 1, 0))    # [*, c, N, N]      #
+        #       else:                                                            #
+        #           a = permute_final_dims(a, (2, 1, 0))                        #
+        #           b = permute_final_dims(b, (2, 0, 1))                        #
+        #                                                                        #
+        #   Step 2 — Either matmul once (default) or matmul a chunk-at-a-time   #
+        #     overwriting ``a`` in place (saves memory for very long N):        #
+        #       if _inplace_chunk_size is not None:                              #
+        #           for i in range(0, a.shape[-3], _inplace_chunk_size):        #
+        #               a_chunk = a[..., i:i+_inplace_chunk_size, :, :]         #
+        #               b_chunk = b[..., i:i+_inplace_chunk_size, :, :]         #
+        #               a[..., i:i+_inplace_chunk_size, :, :] = torch.matmul(   #
+        #                   a_chunk, b_chunk,                                    #
+        #               )                                                        #
+        #           p = a                                                        #
+        #       else:                                                            #
+        #           p = torch.matmul(a, b)                                       #
+        #                                                                        #
+        #   Step 3 — Permute back: move channel to the trailing position:        #
+        #       return permute_final_dims(p, (1, 2, 0))    # [*, N, N, c]       #
+        #                                                                        #
+        # TODO: 三角乘法的外积合并。技巧是把通道维提到 -3 位置，                  #
+        #   让 torch.matmul 沿正确的 residue 轴收缩。                             #
+        #                                                                        #
+        #   输入 ``a`` / ``b`` 形状均为 [*, N, N, c_hidden]。                     #
+        #                                                                        #
+        #   步骤 1 — permute 出 head 维。outgoing 收缩 a 的列与 b 的列；          #
+        #     incoming 收缩 a 的行与 b 的行:                                       #
+        #       if self._outgoing:                                               #
+        #           a = permute_final_dims(a, (2, 0, 1))    # [*, c, N, N]      #
+        #           b = permute_final_dims(b, (2, 1, 0))    # [*, c, N, N]      #
+        #       else:                                                            #
+        #           a = permute_final_dims(a, (2, 1, 0))                        #
+        #           b = permute_final_dims(b, (2, 0, 1))                        #
+        #                                                                        #
+        #   步骤 2 — 默认一次性 matmul；超长序列时按 chunk 原地覆盖 ``a`` 省显存:  #
+        #       if _inplace_chunk_size is not None:                              #
+        #           for i in range(0, a.shape[-3], _inplace_chunk_size):        #
+        #               a_chunk = a[..., i:i+_inplace_chunk_size, :, :]         #
+        #               b_chunk = b[..., i:i+_inplace_chunk_size, :, :]         #
+        #               a[..., i:i+_inplace_chunk_size, :, :] = torch.matmul(   #
+        #                   a_chunk, b_chunk,                                    #
+        #               )                                                        #
+        #           p = a                                                        #
+        #       else:                                                            #
+        #           p = torch.matmul(a, b)                                       #
+        #                                                                        #
+        #   步骤 3 — permute 回去，通道维放到末位:                                  #
+        #       return permute_final_dims(p, (1, 2, 0))    # [*, N, N, c]       #
+        ##########################################################################
+
         if self._outgoing:
             a = permute_final_dims(a, (2, 0, 1))
             b = permute_final_dims(b, (2, 1, 0))
@@ -85,6 +195,10 @@ class BaseTriangleMultiplicativeUpdate(nn.Module, ABC):
             p = torch.matmul(a, b)
 
         return permute_final_dims(p, (1, 2, 0))
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     @abstractmethod
     def forward(
@@ -123,6 +237,33 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         super(TriangleMultiplicativeUpdate, self).__init__(
             c_z=c_z, c_hidden=c_hidden, _outgoing=_outgoing
         )
+        ##########################################################################
+        # TODO: Add the four projection layers on top of the base module:        #
+        #     value branches a_p / b_p  (default init)                           #
+        #     gate branches  a_g / b_g  (gating init)                            #
+        #   All map c_z -> c_hidden and have no bias:                            #
+        #       self.linear_a_p = OpenfoldLinear(                                #
+        #           self.c_z, self.c_hidden, bias=False)                         #
+        #       self.linear_a_g = OpenfoldLinear(                                #
+        #           self.c_z, self.c_hidden, bias=False, init="gating")          #
+        #       self.linear_b_p = OpenfoldLinear(                                #
+        #           self.c_z, self.c_hidden, bias=False)                         #
+        #       self.linear_b_g = OpenfoldLinear(                                #
+        #           self.c_z, self.c_hidden, bias=False, init="gating")          #
+        #                                                                        #
+        # TODO: 在父类基础上追加四个投影层:                                       #
+        #     value 分支 a_p / b_p (默认 init)                                    #
+        #     gate  分支 a_g / b_g (gating init)                                  #
+        #   全部 c_z -> c_hidden、无 bias:                                        #
+        #       self.linear_a_p = OpenfoldLinear(                                #
+        #           self.c_z, self.c_hidden, bias=False)                         #
+        #       self.linear_a_g = OpenfoldLinear(                                #
+        #           self.c_z, self.c_hidden, bias=False, init="gating")          #
+        #       self.linear_b_p = OpenfoldLinear(                                #
+        #           self.c_z, self.c_hidden, bias=False)                         #
+        #       self.linear_b_g = OpenfoldLinear(                                #
+        #           self.c_z, self.c_hidden, bias=False, init="gating")          #
+        ##########################################################################
 
         self.linear_a_p = OpenfoldLinear(self.c_z, self.c_hidden, bias=False)
         self.linear_a_g = OpenfoldLinear(
@@ -132,6 +273,10 @@ class TriangleMultiplicativeUpdate(BaseTriangleMultiplicativeUpdate):
         self.linear_b_g = OpenfoldLinear(
             self.c_z, self.c_hidden, bias=False, init="gating"
         )
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def _inference_forward(
         self,
@@ -586,6 +731,41 @@ class TriangleAttention(nn.Module):
         self.no_heads = no_heads
         self.starting = starting
         self.inf = inf
+        ##########################################################################
+        # TODO: TriangleAttention (Algorithm 13/14) — three sub-modules:         #
+        #                                                                        #
+        #   - Pre-LayerNorm on the input channel:                                #
+        #       self.layer_norm = LayerNorm(self.c_in)                          #
+        #                                                                        #
+        #   - Per-head learnable bias projection (c_in -> no_heads, no bias):    #
+        #       self.linear = OpenfoldLinear(c_in, self.no_heads, bias=False)    #
+        #                                                                        #
+        #   - Underlying multi-bias attention (the OpenFold-style ``Attention``  #
+        #     from triangle_ops, NOT the AF3 one): it accepts ``biases=[...]``   #
+        #     for both the mask bias and the per-head triangle bias. Both Q     #
+        #     and K/V have channel ``c_in``; hidden is ``c_hidden`` per head:    #
+        #       self.mha = Attention(                                            #
+        #           self.c_in, self.c_in, self.c_in,                            #
+        #           self.c_hidden, self.no_heads,                               #
+        #       )                                                                #
+        #                                                                        #
+        # TODO: TriangleAttention (算法 13/14) —— 三个子模块:                    #
+        #                                                                        #
+        #   - 通道维 Pre-LayerNorm:                                                #
+        #       self.layer_norm = LayerNorm(self.c_in)                          #
+        #                                                                        #
+        #   - 每头偏置投影 (c_in -> no_heads，无 bias):                            #
+        #       self.linear = OpenfoldLinear(c_in, self.no_heads, bias=False)    #
+        #                                                                        #
+        #   - 底层多 bias 注意力 (OpenFold 风格 ``Attention``，                     #
+        #     非 AF3 那个) —— 接受 ``biases=[...]`` 列表 (mask bias 与            #
+        #     每头三角 bias 同时传)。Q / K/V 通道都是 ``c_in``、每头隐藏维           #
+        #     ``c_hidden``:                                                      #
+        #       self.mha = Attention(                                            #
+        #           self.c_in, self.c_in, self.c_in,                            #
+        #           self.c_hidden, self.no_heads,                               #
+        #       )                                                                #
+        ##########################################################################
 
         self.layer_norm = LayerNorm(self.c_in)
 
@@ -594,6 +774,10 @@ class TriangleAttention(nn.Module):
         self.mha = Attention(
             self.c_in, self.c_in, self.c_in, self.c_hidden, self.no_heads
         )
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     @torch.jit.ignore
     def _chunk(

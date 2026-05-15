@@ -99,6 +99,54 @@ class DiffusionConditioning(nn.Module):
         z_trunk: torch.Tensor,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
+        ##########################################################################
+        # TODO: Build the time-INDEPENDENT pair conditioning (Algorithm 21 lines#
+        #   3-5 inside DiffusionConditioning). The result is cached and reused  #
+        #   across all diffusion timesteps for the same trunk output.           #
+        #                                                                        #
+        #   Step 1 — Concatenate the trunk pair tensor with the relative-       #
+        #     position-encoded pair feature along the channel axis (so the      #
+        #     fused width is 2*c_z):                                             #
+        #       pair_z = torch.cat(                                              #
+        #           tensors=[z_trunk, self.relpe(relp_feature)],                 #
+        #           dim=-1,                                                      #
+        #       )                                       # [..., N, N, 2*c_z]    #
+        #                                                                        #
+        #   Step 2 — LayerNorm + project back to ``c_z``:                        #
+        #       pair_z = self.linear_no_bias_z(self.layernorm_z(pair_z))         #
+        #                                                                        #
+        #   Step 3 — Two residual Transition (SwiGLU FFN) blocks; use the       #
+        #     inplace path when safe:                                            #
+        #       if inplace_safe:                                                 #
+        #           pair_z += self.transition_z1(pair_z)                         #
+        #           pair_z += self.transition_z2(pair_z)                         #
+        #       else:                                                            #
+        #           pair_z = pair_z + self.transition_z1(pair_z)                 #
+        #           pair_z = pair_z + self.transition_z2(pair_z)                 #
+        #   Return ``pair_z``.                                                   #
+        #                                                                        #
+        # TODO: 构造与时间无关的 pair 条件 (算法 21 第 3-5 行)。结果会跨所有扩散  #
+        #   时间步缓存复用。                                                      #
+        #                                                                        #
+        #   步骤 1 — 沿通道维拼接主干 pair 张量与相对位置编码 (融合宽度 2*c_z):    #
+        #       pair_z = torch.cat(                                              #
+        #           tensors=[z_trunk, self.relpe(relp_feature)],                 #
+        #           dim=-1,                                                      #
+        #       )                                       # [..., N, N, 2*c_z]    #
+        #                                                                        #
+        #   步骤 2 — LayerNorm + 投回 ``c_z``:                                    #
+        #       pair_z = self.linear_no_bias_z(self.layernorm_z(pair_z))         #
+        #                                                                        #
+        #   步骤 3 — 两次残差 Transition (SwiGLU FFN)，安全时走 inplace:           #
+        #       if inplace_safe:                                                 #
+        #           pair_z += self.transition_z1(pair_z)                         #
+        #           pair_z += self.transition_z2(pair_z)                         #
+        #       else:                                                            #
+        #           pair_z = pair_z + self.transition_z1(pair_z)                 #
+        #           pair_z = pair_z + self.transition_z2(pair_z)                 #
+        #   返回 ``pair_z``。                                                     #
+        ##########################################################################
+
         # Pair conditioning
         pair_z = torch.cat(
             tensors=[
@@ -115,6 +163,10 @@ class DiffusionConditioning(nn.Module):
             pair_z = pair_z + self.transition_z1(pair_z)
             pair_z = pair_z + self.transition_z2(pair_z)
         return pair_z
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(
         self,
@@ -508,6 +560,147 @@ class DiffusionModule(nn.Module):
             torch.Tensor: coordinates update
                 [..., N_sample, N_atom, 3]
         """
+        ##########################################################################
+        # TODO: The raw denoising network F_theta — EDM equation (7), middle    #
+        #   block of Algorithm 20. Given scaled noisy coordinates ``r_noisy``,  #
+        #   produce the per-atom coordinate update ``r_update``.                #
+        #                                                                        #
+        #   Step 1 — Sanity-check the sample axis is consistent between          #
+        #     ``r_noisy`` and the noise level:                                   #
+        #       N_sample = r_noisy.size(-3)                                      #
+        #       assert t_hat_noise_level.size(-1) == N_sample                    #
+        #                                                                        #
+        #   Step 2 — Shared conditioning (Algorithm 21). Returns the per-sample #
+        #     single ``s_single`` and the (sample-broadcast-ready) pair         #
+        #     ``z_pair``:                                                        #
+        #       s_single, z_pair = self.diffusion_conditioning(                  #
+        #           t_hat_noise_level,                                           #
+        #           input_feature_dict["relp"],                                  #
+        #           s_inputs=s_inputs,                                           #
+        #           s_trunk=s_trunk,                                             #
+        #           z_trunk=z_trunk,                                             #
+        #           pair_z=pair_z,                                                #
+        #           inplace_safe=inplace_safe,                                   #
+        #           use_conditioning=use_conditioning,                           #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 3 — Insert a length-1 sample axis on the (still sample-        #
+        #     independent) trunk single and pair tensors so atom encoder        #
+        #     broadcasts over N_sample cleanly:                                  #
+        #       s_trunk = expand_at_dim(s_trunk, dim=-3, n=1)                    #
+        #       z_pair  = expand_at_dim(z_pair,  dim=-4, n=1)                    #
+        #                                                                        #
+        #   Step 4 — Atom-Attention Encoder (Algorithm 5), this time WITH the   #
+        #     noisy coordinates ``r_l = r_noisy`` and the cached                 #
+        #     ``p_lm`` / ``c_l``. Returns per-token activations + atom-level    #
+        #     skips for the decoder:                                             #
+        #       a_token, q_skip, c_skip, p_skip = self.atom_attention_encoder(  #
+        #           input_feature_dict["atom_to_token_idx"],                    #
+        #           input_feature_dict["ref_pos"],                              #
+        #           input_feature_dict["ref_charge"],                           #
+        #           input_feature_dict["ref_mask"],                             #
+        #           input_feature_dict["ref_atom_name_chars"],                  #
+        #           input_feature_dict["ref_element"],                          #
+        #           input_feature_dict["d_lm"],                                 #
+        #           input_feature_dict["v_lm"],                                 #
+        #           input_feature_dict["pad_info"],                             #
+        #           r_l=r_noisy,                                                 #
+        #           s=s_trunk,                                                   #
+        #           z=z_pair,                                                    #
+        #           p_lm=p_lm, c_l=c_l,                                          #
+        #       )                                                                #
+        #                                                                        #
+        #   Step 5 — Fold the conditioning single ``s_single`` into ``a_token`` #
+        #     (LN + linear), upcasting to fp32 for stability:                   #
+        #       a_token = a_token.to(torch.float32)                              #
+        #       a_token = a_token + self.linear_no_bias_s(                       #
+        #           self.layernorm_s(s_single))                                  #
+        #                                                                        #
+        #   Step 6 — Token-level DiffusionTransformer (Algorithm 23), all inputs#
+        #     cast to fp32:                                                      #
+        #       z = z_pair.to(torch.float32)                                     #
+        #       a_token = self.diffusion_transformer(                            #
+        #           a=a_token.to(torch.float32),                                 #
+        #           s=s_single.to(torch.float32),                                #
+        #           z=z,                                                         #
+        #       )                                                                #
+        #       a_token = self.layernorm_a(a_token)                              #
+        #                                                                        #
+        #   Step 7 — Atom-Attention Decoder (Algorithm 6) — back to atoms via   #
+        #     the encoder's skip connections, producing the coordinate update:  #
+        #       r_update = self.atom_attention_decoder(                          #
+        #           atom_to_token_idx=input_feature_dict["atom_to_token_idx"], #
+        #           a=a_token,                                                   #
+        #           q_skip=q_skip, c_skip=c_skip, p_skip=p_skip,                #
+        #       )                                                                #
+        #   Return ``r_update`` ([..., N_sample, N_atom, 3]).                    #
+        #                                                                        #
+        # TODO: 原始去噪网络 F_theta —— EDM 公式 (7) (算法 20 的中间块)。         #
+        #   输入缩放后的噪声坐标 ``r_noisy``，输出每原子坐标增量 ``r_update``。   #
+        #                                                                        #
+        #   步骤 1 — sample 轴一致性校验:                                          #
+        #       N_sample = r_noisy.size(-3)                                      #
+        #       assert t_hat_noise_level.size(-1) == N_sample                    #
+        #                                                                        #
+        #   步骤 2 — 共享条件 (算法 21)：                                          #
+        #       s_single, z_pair = self.diffusion_conditioning(                  #
+        #           t_hat_noise_level,                                           #
+        #           input_feature_dict["relp"],                                  #
+        #           s_inputs=s_inputs,                                           #
+        #           s_trunk=s_trunk,                                             #
+        #           z_trunk=z_trunk,                                             #
+        #           pair_z=pair_z,                                                #
+        #           inplace_safe=inplace_safe,                                   #
+        #           use_conditioning=use_conditioning,                           #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 3 — 给与 sample 无关的 trunk 张量插入长度 1 的 sample 轴，以便    #
+        #     原子编码器广播:                                                      #
+        #       s_trunk = expand_at_dim(s_trunk, dim=-3, n=1)                    #
+        #       z_pair  = expand_at_dim(z_pair,  dim=-4, n=1)                    #
+        #                                                                        #
+        #   步骤 4 — Atom-Attention Encoder (算法 5)，**带坐标**：                 #
+        #       a_token, q_skip, c_skip, p_skip = self.atom_attention_encoder(  #
+        #           input_feature_dict["atom_to_token_idx"],                    #
+        #           input_feature_dict["ref_pos"],                              #
+        #           input_feature_dict["ref_charge"],                           #
+        #           input_feature_dict["ref_mask"],                             #
+        #           input_feature_dict["ref_atom_name_chars"],                  #
+        #           input_feature_dict["ref_element"],                          #
+        #           input_feature_dict["d_lm"],                                 #
+        #           input_feature_dict["v_lm"],                                 #
+        #           input_feature_dict["pad_info"],                             #
+        #           r_l=r_noisy,                                                 #
+        #           s=s_trunk,                                                   #
+        #           z=z_pair,                                                    #
+        #           p_lm=p_lm, c_l=c_l,                                          #
+        #       )                                                                #
+        #                                                                        #
+        #   步骤 5 — 把 ``s_single`` (经 LN + 线性) 叠加到 ``a_token``，          #
+        #     升 fp32 提升稳定性:                                                  #
+        #       a_token = a_token.to(torch.float32)                              #
+        #       a_token = a_token + self.linear_no_bias_s(                       #
+        #           self.layernorm_s(s_single))                                  #
+        #                                                                        #
+        #   步骤 6 — 跑 token 级 DiffusionTransformer (算法 23)，全部 fp32:        #
+        #       z = z_pair.to(torch.float32)                                     #
+        #       a_token = self.diffusion_transformer(                            #
+        #           a=a_token.to(torch.float32),                                 #
+        #           s=s_single.to(torch.float32),                                #
+        #           z=z,                                                         #
+        #       )                                                                #
+        #       a_token = self.layernorm_a(a_token)                              #
+        #                                                                        #
+        #   步骤 7 — Atom-Attention Decoder (算法 6) —— 经编码器留下的 skip 回到  #
+        #     原子级，输出坐标增量:                                                  #
+        #       r_update = self.atom_attention_decoder(                          #
+        #           atom_to_token_idx=input_feature_dict["atom_to_token_idx"], #
+        #           a=a_token,                                                   #
+        #           q_skip=q_skip, c_skip=c_skip, p_skip=p_skip,                #
+        #       )                                                                #
+        #   返回 ``r_update`` ([..., N_sample, N_atom, 3])。                      #
+        ##########################################################################
+
         N_sample = r_noisy.size(-3)
         assert t_hat_noise_level.size(-1) == N_sample
 
@@ -565,6 +758,10 @@ class DiffusionModule(nn.Module):
             p_skip=p_skip,
         )
         return r_update
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(
         self,

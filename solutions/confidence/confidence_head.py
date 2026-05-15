@@ -405,6 +405,125 @@ class ConfidenceHead(nn.Module):
         x_pred_rep_coords: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Confidence head for a single diffusion sample (avoids OOM)."""
+        ##########################################################################
+        # TODO: Per-sample confidence head — predicts pLDDT, PAE, PDE,           #
+        #   resolved for ONE diffusion sample. Same idea repeated by the caller #
+        #   for every sample.                                                    #
+        #                                                                        #
+        #   Step 1 — Pairwise distance between every pair of representative     #
+        #     atoms, in fp32 (autocast off):                                     #
+        #       with torch.amp.autocast("cuda", enabled=False):                  #
+        #           x_pred_rep_coords = x_pred_rep_coords.to(torch.float32)      #
+        #           distance_pred = torch.cdist(                                 #
+        #               x_pred_rep_coords, x_pred_rep_coords)                    #
+        #                                                                        #
+        #   Step 2 — Bin the distances and inject into the pair conditioning.   #
+        #     Two paths: one-hot binning (``one_hot`` returns ``num_bins``      #
+        #     columns) and a raw distance projection — sum both in place:       #
+        #       z_pair += self.linear_no_bias_d(                                 #
+        #           one_hot(distance_pred, self.lower_bins, self.upper_bins)) #
+        #       z_pair += self.linear_no_bias_d_wo_onehot(                       #
+        #           distance_pred.unsqueeze(-1))                                 #
+        #                                                                        #
+        #   Step 3 — Run the small PairformerStack (uses both single and pair  #
+        #     tracks):                                                           #
+        #       s_single, z_pair = self.pairformer_stack(                        #
+        #           s_trunk, z_pair, pair_mask)                                  #
+        #                                                                        #
+        #   Step 4 — Upcast both streams to fp32; pull index maps from the     #
+        #     feature dict (atom -> token idx for broadcast; atom -> per-token #
+        #     local atom idx for the slot-specific plddt / resolved weights):  #
+        #       z_pair   = z_pair.to(torch.float32)                              #
+        #       s_single = s_single.to(torch.float32)                            #
+        #       atom_to_token_idx  = input_feature_dict["atom_to_token_idx"]    #
+        #       atom_to_tokatom_idx = input_feature_dict["atom_to_tokatom_idx"]  #
+        #                                                                        #
+        #   Step 5 — Heads (run under autocast(False) for numerical stability): #
+        #       with torch.amp.autocast("cuda", enabled=False):                  #
+        #         # PAE: directional, no symmetrization                         #
+        #         pae_pred = self.linear_no_bias_pae(self.pae_ln(z_pair))       #
+        #         # PDE: symmetrized over (i, j) before LN -> output is        #
+        #         #   pairwise distance error, which is symmetric              #
+        #         pde_pred = self.linear_no_bias_pde(                           #
+        #             self.pde_ln(z_pair + z_pair.transpose(-2, -3)))           #
+        #         # Broadcast s_single back to atoms:                           #
+        #         a = broadcast_token_to_atom(                                  #
+        #             x_token=s_single, atom_to_token_idx=atom_to_token_idx)    #
+        #         # pLDDT / resolved use per-(atom-slot) weight matrices       #
+        #         # indexed by ``atom_to_tokatom_idx``:                         #
+        #         plddt_pred = torch.einsum(                                    #
+        #             "...nc,ncb->...nb",                                       #
+        #             self.plddt_ln(a),                                          #
+        #             self.plddt_weight[atom_to_tokatom_idx],                   #
+        #         )                                                              #
+        #         resolved_pred = torch.einsum(                                  #
+        #             "...nc,ncb->...nb",                                       #
+        #             self.resolved_ln(a),                                       #
+        #             self.resolved_weight[atom_to_tokatom_idx],                #
+        #         )                                                              #
+        #                                                                        #
+        #   Step 6 — Release GPU cache for very long sequences:                 #
+        #       if (not self.training and z_pair.shape[-2] > 2000               #
+        #           and torch.cuda.is_available()):                              #
+        #           torch.cuda.empty_cache()                                     #
+        #   Return ``(plddt_pred, pae_pred, pde_pred, resolved_pred)``.          #
+        #                                                                        #
+        # TODO: 单个扩散样本的置信度头 —— 预测 pLDDT、PAE、PDE、resolved。       #
+        #   外层调用方对每个样本各跑一次这里。                                       #
+        #                                                                        #
+        #   步骤 1 — 在 fp32 (autocast off) 下算每对代表原子的距离矩阵:             #
+        #       with torch.amp.autocast("cuda", enabled=False):                  #
+        #           x_pred_rep_coords = x_pred_rep_coords.to(torch.float32)      #
+        #           distance_pred = torch.cdist(                                 #
+        #               x_pred_rep_coords, x_pred_rep_coords)                    #
+        #                                                                        #
+        #   步骤 2 — 把距离分 bin 后塞回 pair 条件。两路: one-hot bin 投影 + 原始    #
+        #     距离投影，原地累加:                                                    #
+        #       z_pair += self.linear_no_bias_d(                                 #
+        #           one_hot(distance_pred, self.lower_bins, self.upper_bins)) #
+        #       z_pair += self.linear_no_bias_d_wo_onehot(                       #
+        #           distance_pred.unsqueeze(-1))                                 #
+        #                                                                        #
+        #   步骤 3 — 跑小型 PairformerStack (有 single 通道):                       #
+        #       s_single, z_pair = self.pairformer_stack(                        #
+        #           s_trunk, z_pair, pair_mask)                                  #
+        #                                                                        #
+        #   步骤 4 — 两路升 fp32；取出索引映射 (原子->token；原子-> 每 token 内的    #
+        #     原子序号，用于 plddt / resolved 的 slot-specific 权重):                #
+        #       z_pair   = z_pair.to(torch.float32)                              #
+        #       s_single = s_single.to(torch.float32)                            #
+        #       atom_to_token_idx  = input_feature_dict["atom_to_token_idx"]    #
+        #       atom_to_tokatom_idx = input_feature_dict["atom_to_tokatom_idx"]  #
+        #                                                                        #
+        #   步骤 5 — 四个头 (autocast(False) 稳数值):                               #
+        #       with torch.amp.autocast("cuda", enabled=False):                  #
+        #         # PAE: 有向，不对称化                                            #
+        #         pae_pred = self.linear_no_bias_pae(self.pae_ln(z_pair))       #
+        #         # PDE: 距离误差 (对称量)，进 LN 前先对称化                       #
+        #         pde_pred = self.linear_no_bias_pde(                           #
+        #             self.pde_ln(z_pair + z_pair.transpose(-2, -3)))           #
+        #         # s_single 广播回原子级                                          #
+        #         a = broadcast_token_to_atom(                                  #
+        #             x_token=s_single, atom_to_token_idx=atom_to_token_idx)    #
+        #         # pLDDT / resolved 使用按 (atom-slot) 索引的权重矩阵            #
+        #         plddt_pred = torch.einsum(                                    #
+        #             "...nc,ncb->...nb",                                       #
+        #             self.plddt_ln(a),                                          #
+        #             self.plddt_weight[atom_to_tokatom_idx],                   #
+        #         )                                                              #
+        #         resolved_pred = torch.einsum(                                  #
+        #             "...nc,ncb->...nb",                                       #
+        #             self.resolved_ln(a),                                       #
+        #             self.resolved_weight[atom_to_tokatom_idx],                #
+        #         )                                                              #
+        #                                                                        #
+        #   步骤 6 — 超长序列释放显存:                                              #
+        #       if (not self.training and z_pair.shape[-2] > 2000               #
+        #           and torch.cuda.is_available()):                              #
+        #           torch.cuda.empty_cache()                                     #
+        #   返回 ``(plddt_pred, pae_pred, pde_pred, resolved_pred)``。            #
+        ##########################################################################
+
         with torch.amp.autocast("cuda", enabled=False):
             x_pred_rep_coords = x_pred_rep_coords.to(torch.float32)
             distance_pred = torch.cdist(x_pred_rep_coords, x_pred_rep_coords)
@@ -446,3 +565,7 @@ class ConfidenceHead(nn.Module):
         if not self.training and z_pair.shape[-2] > 2000 and torch.cuda.is_available():
             torch.cuda.empty_cache()
         return plddt_pred, pae_pred, pde_pred, resolved_pred
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################

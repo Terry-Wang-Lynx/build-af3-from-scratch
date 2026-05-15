@@ -181,6 +181,177 @@ def sample_diffusion(
             [..., N_sample, N_atom, 3]
     """
     del guidance_configs
+    ##########################################################################
+    # TODO: Algorithm 18 — Euler-step (predictor-corrector) coordinate        #
+    #   diffusion sampler. Walks ``noise_schedule`` from t=T (pure Gaussian   #
+    #   noise) down to t=0 (clean coordinates), calling ``denoise_net``       #
+    #   once per step.                                                        #
+    #                                                                        #
+    #   Step 1 — Read the static shapes from the inputs:                     #
+    #       N_atom      = input_feature_dict["atom_to_token_idx"].size(-1)   #
+    #       batch_shape = s_inputs.shape[:-2]                                #
+    #       device      = s_inputs.device                                    #
+    #       dtype       = s_inputs.dtype                                     #
+    #                                                                        #
+    #   Step 2 — Inner closure that runs ONE chunk of N_sample (so very-     #
+    #     large N_sample can be split into smaller passes):                  #
+    #                                                                        #
+    #     def _chunk_sample_diffusion(chunk_n_sample, inplace_safe):         #
+    #         # init at t=T with pure Gaussian, scaled by noise_schedule[0]: #
+    #         x_l = noise_schedule[0] * torch.randn(                          #
+    #             size=(*batch_shape, chunk_n_sample, N_atom, 3),             #
+    #             device=device, dtype=dtype,                                 #
+    #         )                                                               #
+    #                                                                        #
+    #         for step_i, (c_tau_last, c_tau) in enumerate(                   #
+    #             zip(noise_schedule[:-1], noise_schedule[1:])                #
+    #         ):                                                              #
+    #             # (a) re-centre + random rotate each sample at each step:  #
+    #             x_l = (                                                     #
+    #                 centre_random_augmentation(                             #
+    #                     x_input_coords=x_l, N_sample=1)                     #
+    #                 .squeeze(dim=-3)                                        #
+    #                 .to(dtype)                                              #
+    #             )                                                           #
+    #                                                                        #
+    #             # (b) Predictor: hop noise level c_tau_last -> t_hat by    #
+    #             #     re-noising. ``gamma`` is non-zero only when current  #
+    #             #     noise level is above ``gamma_min``:                  #
+    #             gamma = float(gamma0) if c_tau > gamma_min else 0           #
+    #             t_hat = c_tau_last * (gamma + 1)                            #
+    #             delta_noise_level = torch.sqrt(t_hat**2 - c_tau_last**2)    #
+    #             x_noisy = x_l + (                                           #
+    #                 noise_scale_lambda * delta_noise_level                  #
+    #                 * torch.randn(                                          #
+    #                     size=x_l.shape, device=device, dtype=dtype)        #
+    #             )                                                           #
+    #                                                                        #
+    #             # (c) Corrector: a single Euler denoise step from t_hat    #
+    #             #     to c_tau. Broadcast t_hat across the batch dims for #
+    #             #     ``denoise_net``:                                      #
+    #             t_hat = (                                                   #
+    #                 t_hat.reshape((1,) * (len(batch_shape) + 1))            #
+    #                 .expand(*batch_shape, chunk_n_sample)                   #
+    #                 .to(dtype)                                              #
+    #             )                                                           #
+    #             x_denoised = denoise_net(                                   #
+    #                 x_noisy=x_noisy,                                        #
+    #                 t_hat_noise_level=t_hat,                                #
+    #                 input_feature_dict=input_feature_dict,                  #
+    #                 s_inputs=s_inputs, s_trunk=s_trunk, z_trunk=z_trunk,   #
+    #                 pair_z=pair_z, p_lm=p_lm, c_l=c_l,                     #
+    #                 chunk_size=attn_chunk_size,                             #
+    #                 inplace_safe=inplace_safe,                              #
+    #                 enable_efficient_fusion=enable_efficient_fusion,       #
+    #             )                                                           #
+    #                                                                        #
+    #             # Euler integration step: delta = (x_noisy - x_denoised)/  #
+    #             #     t_hat is the score-like direction; the step is       #
+    #             #     scaled by (c_tau - t_hat) and the global eta:        #
+    #             delta = (x_noisy - x_denoised) / t_hat[..., None, None]    #
+    #             dt    = c_tau - t_hat                                       #
+    #             x_l   = x_noisy + step_scale_eta * dt[..., None, None] * delta#
+    #                                                                        #
+    #         return x_l                                                      #
+    #                                                                        #
+    #   Step 3 — Run once, or chunk if requested:                            #
+    #     if diffusion_chunk_size is None:                                   #
+    #         x_l = _chunk_sample_diffusion(                                  #
+    #             N_sample, inplace_safe=inplace_safe)                        #
+    #     else:                                                              #
+    #         x_l = []                                                       #
+    #         no_chunks = N_sample // diffusion_chunk_size + (               #
+    #             N_sample % diffusion_chunk_size != 0)                       #
+    #         for i in range(no_chunks):                                     #
+    #             chunk_n_sample = (                                          #
+    #                 diffusion_chunk_size                                    #
+    #                 if i < no_chunks - 1                                    #
+    #                 else N_sample - i * diffusion_chunk_size)               #
+    #             chunk_x_l = _chunk_sample_diffusion(                        #
+    #                 chunk_n_sample, inplace_safe=inplace_safe)              #
+    #             x_l.append(chunk_x_l)                                       #
+    #         x_l = torch.cat(x_l, -3)                                        #
+    #     return x_l                                                          #
+    #                                                                        #
+    # TODO: 算法 18 —— Euler 步 (预测-校正) 坐标扩散采样器。沿 ``noise_schedule``#
+    #   从 t=T (纯高斯噪声) 走到 t=0 (干净坐标)，每步调用 ``denoise_net`` 一次。  #
+    #                                                                        #
+    #   步骤 1 — 读取静态形状:                                                  #
+    #       N_atom      = input_feature_dict["atom_to_token_idx"].size(-1)   #
+    #       batch_shape = s_inputs.shape[:-2]                                #
+    #       device      = s_inputs.device                                    #
+    #       dtype       = s_inputs.dtype                                     #
+    #                                                                        #
+    #   步骤 2 — 内部闭包：跑一个 N_sample 的子块 (大 N_sample 时可分块):       #
+    #     def _chunk_sample_diffusion(chunk_n_sample, inplace_safe):         #
+    #         # t=T 时纯高斯，幅度由 noise_schedule[0] 决定:                    #
+    #         x_l = noise_schedule[0] * torch.randn(                          #
+    #             size=(*batch_shape, chunk_n_sample, N_atom, 3),             #
+    #             device=device, dtype=dtype,                                 #
+    #         )                                                               #
+    #         for step_i, (c_tau_last, c_tau) in enumerate(                   #
+    #             zip(noise_schedule[:-1], noise_schedule[1:])                #
+    #         ):                                                              #
+    #             # (a) 每步对每个样本重新居中 + 随机旋转:                       #
+    #             x_l = (                                                     #
+    #                 centre_random_augmentation(                             #
+    #                     x_input_coords=x_l, N_sample=1)                     #
+    #                 .squeeze(dim=-3)                                        #
+    #                 .to(dtype)                                              #
+    #             )                                                           #
+    #             # (b) Predictor: 从 c_tau_last 重新加噪到 t_hat。            #
+    #             #     当前噪声水平超过 ``gamma_min`` 时 ``gamma`` 才非零:    #
+    #             gamma = float(gamma0) if c_tau > gamma_min else 0           #
+    #             t_hat = c_tau_last * (gamma + 1)                            #
+    #             delta_noise_level = torch.sqrt(t_hat**2 - c_tau_last**2)    #
+    #             x_noisy = x_l + (                                           #
+    #                 noise_scale_lambda * delta_noise_level                  #
+    #                 * torch.randn(                                          #
+    #                     size=x_l.shape, device=device, dtype=dtype)        #
+    #             )                                                           #
+    #             # (c) Corrector: 一次 Euler 去噪步 (t_hat -> c_tau)。        #
+    #             #     先把 t_hat 广播到 batch 维:                             #
+    #             t_hat = (                                                   #
+    #                 t_hat.reshape((1,) * (len(batch_shape) + 1))            #
+    #                 .expand(*batch_shape, chunk_n_sample)                   #
+    #                 .to(dtype)                                              #
+    #             )                                                           #
+    #             x_denoised = denoise_net(                                   #
+    #                 x_noisy=x_noisy,                                        #
+    #                 t_hat_noise_level=t_hat,                                #
+    #                 input_feature_dict=input_feature_dict,                  #
+    #                 s_inputs=s_inputs, s_trunk=s_trunk, z_trunk=z_trunk,   #
+    #                 pair_z=pair_z, p_lm=p_lm, c_l=c_l,                     #
+    #                 chunk_size=attn_chunk_size,                             #
+    #                 inplace_safe=inplace_safe,                              #
+    #                 enable_efficient_fusion=enable_efficient_fusion,       #
+    #             )                                                           #
+    #             # Euler 积分:                                                #
+    #             delta = (x_noisy - x_denoised) / t_hat[..., None, None]    #
+    #             dt    = c_tau - t_hat                                       #
+    #             x_l   = x_noisy + step_scale_eta * dt[..., None, None] * delta#
+    #         return x_l                                                      #
+    #                                                                        #
+    #   步骤 3 — 直接跑或分块跑:                                                #
+    #     if diffusion_chunk_size is None:                                   #
+    #         x_l = _chunk_sample_diffusion(                                  #
+    #             N_sample, inplace_safe=inplace_safe)                        #
+    #     else:                                                              #
+    #         x_l = []                                                       #
+    #         no_chunks = N_sample // diffusion_chunk_size + (               #
+    #             N_sample % diffusion_chunk_size != 0)                       #
+    #         for i in range(no_chunks):                                     #
+    #             chunk_n_sample = (                                          #
+    #                 diffusion_chunk_size                                    #
+    #                 if i < no_chunks - 1                                    #
+    #                 else N_sample - i * diffusion_chunk_size)               #
+    #             chunk_x_l = _chunk_sample_diffusion(                        #
+    #                 chunk_n_sample, inplace_safe=inplace_safe)              #
+    #             x_l.append(chunk_x_l)                                       #
+    #         x_l = torch.cat(x_l, -3)                                        #
+    #     return x_l                                                          #
+    ##########################################################################
+
     N_atom = input_feature_dict["atom_to_token_idx"].size(-1)
     batch_shape = s_inputs.shape[:-2]
     device = s_inputs.device
@@ -262,6 +433,10 @@ def sample_diffusion(
             x_l.append(chunk_x_l)
         x_l = torch.cat(x_l, -3)  # [..., N_sample, N_atom, 3]
     return x_l
+
+    ##########################################################################
+    #               END OF YOUR CODE                                         #
+    ##########################################################################
 
 
 def sample_diffusion_training(

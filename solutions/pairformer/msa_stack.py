@@ -61,6 +61,77 @@ class MSAPairWeightedAveraging(nn.Module):
         self.c = c
         self.n_heads = n_heads
         self.c_z = c_z
+        ##########################################################################
+        # TODO: MSAPairWeightedAveraging (Algorithm 10 inside MSAModule). Set up #
+        #   the input projections, the softmax used to turn pair logits into     #
+        #   attention weights, and the output projection.                        #
+        #                                                                        #
+        #   - MSA-side LayerNorm + value projection (multi-head):                #
+        #       self.layernorm_m = LayerNorm(self.c_m)                          #
+        #       self.linear_no_bias_mv = LinearNoBias(                          #
+        #           in_features=self.c_m,                                       #
+        #           out_features=self.c * self.n_heads,                          #
+        #       )                                                                #
+        #                                                                        #
+        #   - Pair-side LayerNorm + per-head logits (c_z -> n_heads):            #
+        #       self.layernorm_z = LayerNorm(self.c_z)                          #
+        #       self.linear_no_bias_z = LinearNoBias(                           #
+        #           in_features=self.c_z, out_features=self.n_heads,             #
+        #       )                                                                #
+        #                                                                        #
+        #   - MSA-side gate projection (c_m -> c*n_heads), zero-init so the     #
+        #     output residual starts closed (sigmoid(0)=0.5):                    #
+        #       self.linear_no_bias_mg = LinearNoBias(                          #
+        #           in_features=self.c_m,                                       #
+        #           out_features=self.c * self.n_heads,                          #
+        #           initializer="zeros",                                         #
+        #       )                                                                #
+        #                                                                        #
+        #   - Softmax along the "second residue" axis of the pair grid (dim=-2):#
+        #       self.softmax_w = nn.Softmax(dim=-2)                              #
+        #                                                                        #
+        #   - Output projection back to c_m, zero-init so the block starts as a #
+        #     no-op:                                                              #
+        #       self.linear_no_bias_out = LinearNoBias(                          #
+        #           in_features=self.c * self.n_heads,                           #
+        #           out_features=self.c_m,                                       #
+        #           initializer="zeros",                                         #
+        #       )                                                                #
+        #                                                                        #
+        # TODO: MSAPairWeightedAveraging (MSAModule 内的算法 10)。                #
+        #   构造输入投影、把 pair logits 变成权重的 softmax、以及输出投影。       #
+        #                                                                        #
+        #   - MSA 侧 LayerNorm + 多头 value 投影:                                  #
+        #       self.layernorm_m = LayerNorm(self.c_m)                          #
+        #       self.linear_no_bias_mv = LinearNoBias(                          #
+        #           in_features=self.c_m,                                       #
+        #           out_features=self.c * self.n_heads,                          #
+        #       )                                                                #
+        #                                                                        #
+        #   - pair 侧 LayerNorm + 每头 logits (c_z -> n_heads):                   #
+        #       self.layernorm_z = LayerNorm(self.c_z)                          #
+        #       self.linear_no_bias_z = LinearNoBias(                           #
+        #           in_features=self.c_z, out_features=self.n_heads,             #
+        #       )                                                                #
+        #                                                                        #
+        #   - MSA 侧门控投影 (c_m -> c*n_heads)，零初始化使输出门初闭:              #
+        #       self.linear_no_bias_mg = LinearNoBias(                          #
+        #           in_features=self.c_m,                                       #
+        #           out_features=self.c * self.n_heads,                          #
+        #           initializer="zeros",                                         #
+        #       )                                                                #
+        #                                                                        #
+        #   - 沿 pair 网格的"第二条 residue 轴" (dim=-2) 做 softmax:                #
+        #       self.softmax_w = nn.Softmax(dim=-2)                              #
+        #                                                                        #
+        #   - 输出投影回 c_m，零初始化使块从恒等开始:                                #
+        #       self.linear_no_bias_out = LinearNoBias(                          #
+        #           in_features=self.c * self.n_heads,                           #
+        #           out_features=self.c_m,                                       #
+        #           initializer="zeros",                                         #
+        #       )                                                                #
+        ##########################################################################
+
         # Input projections
         self.layernorm_m = LayerNorm(self.c_m)
         self.linear_no_bias_mv = LinearNoBias(
@@ -83,6 +154,10 @@ class MSAPairWeightedAveraging(nn.Module):
             out_features=self.c_m,
             initializer="zeros",
         )
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(self, m: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """

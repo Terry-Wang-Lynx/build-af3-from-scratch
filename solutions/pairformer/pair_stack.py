@@ -86,6 +86,97 @@ class PairformerBlock(nn.Module):
     ) -> None:
         super(PairformerBlock, self).__init__()
         self.n_heads = n_heads
+        ##########################################################################
+        # TODO: PairformerBlock (Algorithm 17 lines 2-8) — wire up the seven    #
+        #   sub-modules (or nine, when c_s > 0).                                  #
+        #                                                                        #
+        #   Step 1 — Optional hidden-dim rescaling (mini-config knob): when     #
+        #     ``hidden_scale_up=True`` we infer the triangle widths from c_z so #
+        #     scaling c_z scales everything else accordingly:                    #
+        #       if hidden_scale_up:                                              #
+        #           no_heads_pair = c_z // c_hidden_pair_att                    #
+        #           c_hidden_mul  = c_z                                          #
+        #                                                                        #
+        #   Step 2 — Two triangle-multiplication blocks (Alg 11 outgoing,        #
+        #     Alg 12 incoming):                                                  #
+        #       self.tri_mul_out = TriangleMultiplicationOutgoing(              #
+        #           c_z=c_z, c_hidden=c_hidden_mul)                              #
+        #       self.tri_mul_in  = TriangleMultiplicationIncoming(              #
+        #           c_z=c_z, c_hidden=c_hidden_mul)                              #
+        #                                                                        #
+        #   Step 3 — Two triangle-attention blocks (Alg 13 starting node,       #
+        #     Alg 14 ending node — note ``starting=True`` is the default; the   #
+        #     ``end`` variant achieves Alg 14 by physically transposing the    #
+        #     input in forward, see PairformerBlock.forward):                   #
+        #       self.tri_att_start = TriangleAttention(                          #
+        #           c_in=c_z, c_hidden=c_hidden_pair_att,                       #
+        #           no_heads=no_heads_pair)                                      #
+        #       self.tri_att_end   = TriangleAttention(                          #
+        #           c_in=c_z, c_hidden=c_hidden_pair_att,                       #
+        #           no_heads=no_heads_pair)                                      #
+        #                                                                        #
+        #   Step 4 — Row-wise dropout (training-only) + remembered probability  #
+        #     for downstream blocks that need to mask channels themselves:       #
+        #       self.dropout_row = DropoutRowwise(dropout)                       #
+        #       self.p_drop      = dropout                                       #
+        #                                                                        #
+        #   Step 5 — Pair-transition SwiGLU FFN (Alg 11 applied to z):           #
+        #       self.pair_transition = Transition(                              #
+        #           c_in=c_z, n=num_intermediate_factor)                         #
+        #                                                                        #
+        #   Step 6 — Single-track sub-blocks (only when c_s > 0). The pair-bias #
+        #     attention is in plain-LN mode (``has_s=False``) and uses          #
+        #     ``create_offset_ln_z=True`` (Pairformer convention). The single   #
+        #     transition uses fixed factor n=4:                                  #
+        #       self.c_s = c_s                                                   #
+        #       if self.c_s > 0:                                                 #
+        #           self.attention_pair_bias = AttentionPairBias(               #
+        #               has_s=False, create_offset_ln_z=True,                   #
+        #               n_heads=n_heads, c_a=c_s, c_z=c_z)                       #
+        #           self.single_transition = Transition(c_in=c_s, n=4)          #
+        #                                                                        #
+        # TODO: PairformerBlock (算法 17 第 2-8 行) —— 7 个 (或 9 个，c_s>0       #
+        #   时) 子模块:                                                            #
+        #                                                                        #
+        #   步骤 1 — 可选的隐藏维度联动 (mini-config 开关):                         #
+        #       if hidden_scale_up:                                              #
+        #           no_heads_pair = c_z // c_hidden_pair_att                    #
+        #           c_hidden_mul  = c_z                                          #
+        #                                                                        #
+        #   步骤 2 — 两个三角乘 (算法 11 / 12):                                    #
+        #       self.tri_mul_out = TriangleMultiplicationOutgoing(              #
+        #           c_z=c_z, c_hidden=c_hidden_mul)                              #
+        #       self.tri_mul_in  = TriangleMultiplicationIncoming(              #
+        #           c_z=c_z, c_hidden=c_hidden_mul)                              #
+        #                                                                        #
+        #   步骤 3 — 两个三角注意力 (算法 13 / 14)。这里都用默认 ``starting=True``，#
+        #     ``tri_att_end`` 在 forward 里靠物理转置实现算法 14:                  #
+        #       self.tri_att_start = TriangleAttention(                          #
+        #           c_in=c_z, c_hidden=c_hidden_pair_att,                       #
+        #           no_heads=no_heads_pair)                                      #
+        #       self.tri_att_end   = TriangleAttention(                          #
+        #           c_in=c_z, c_hidden=c_hidden_pair_att,                       #
+        #           no_heads=no_heads_pair)                                      #
+        #                                                                        #
+        #   步骤 4 — 行向 dropout (仅训练) 和记住的概率:                            #
+        #       self.dropout_row = DropoutRowwise(dropout)                       #
+        #       self.p_drop      = dropout                                       #
+        #                                                                        #
+        #   步骤 5 — Pair Transition (作用在 z 上的 Alg 11):                       #
+        #       self.pair_transition = Transition(                              #
+        #           c_in=c_z, n=num_intermediate_factor)                         #
+        #                                                                        #
+        #   步骤 6 — single 通道子模块 (仅 c_s>0)。pair-bias attention 用普通 LN   #
+        #     模式 (``has_s=False``)、``create_offset_ln_z=True``；single        #
+        #     transition 固定 n=4:                                                #
+        #       self.c_s = c_s                                                   #
+        #       if self.c_s > 0:                                                 #
+        #           self.attention_pair_bias = AttentionPairBias(               #
+        #               has_s=False, create_offset_ln_z=True,                   #
+        #               n_heads=n_heads, c_a=c_s, c_z=c_z)                       #
+        #           self.single_transition = Transition(c_in=c_s, n=4)          #
+        ##########################################################################
+
         if hidden_scale_up:
             no_heads_pair = c_z // c_hidden_pair_att
             c_hidden_mul = c_z
@@ -112,6 +203,10 @@ class PairformerBlock(nn.Module):
                 has_s=False, create_offset_ln_z=True, n_heads=n_heads, c_a=c_s, c_z=c_z
             )
             self.single_transition = Transition(c_in=c_s, n=4)
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
 
     def forward(
         self,

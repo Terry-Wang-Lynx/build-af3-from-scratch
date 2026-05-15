@@ -50,7 +50,42 @@ class DistogramHead(nn.Module):
             torch.Tensor: distogram probability distribution
                 [*, N_token, N_token, no_bins]
         """
+        ##########################################################################
+        # TODO: Algorithm 1 line 17 — distogram logits from the pair tensor.    #
+        #   ``self.linear`` is zero-init (so the head outputs uniform at the    #
+        #   start of training), mapping ``c_z -> no_bins``.                     #
+        #                                                                        #
+        #   Step 1 — Per-pair logits:                                            #
+        #       logits = self.linear(z)            # [*, N, N, no_bins]          #
+        #                                                                        #
+        #   Step 2 — Symmetrize over (i, j) so the distogram is invariant to    #
+        #     pair ordering. The Pairformer's pair tensor is not strictly       #
+        #     symmetric; AF3 explicitly enforces it on the distogram readout:   #
+        #       logits = logits + logits.transpose(-2, -3)                       #
+        #                                                                        #
+        #   Step 3 — Return raw logits — the caller does softmax / CE loss     #
+        #     downstream:                                                        #
+        #       return logits                                                    #
+        #                                                                        #
+        # TODO: 算法 1 第 17 行 —— 由 pair 张量产出 distogram logits。            #
+        #   ``self.linear`` 是零初始化 (训练初期输出均匀分布)，c_z -> no_bins。   #
+        #                                                                        #
+        #   步骤 1 — 每 pair 的 logits:                                            #
+        #       logits = self.linear(z)            # [*, N, N, no_bins]          #
+        #                                                                        #
+        #   步骤 2 — 沿 (i, j) 对称化，使 distogram 与 pair 顺序无关:               #
+        #     (Pairformer 的 pair 张量并不严格对称，AF3 在这里显式强制)             #
+        #       logits = logits + logits.transpose(-2, -3)                       #
+        #                                                                        #
+        #   步骤 3 — 返回原始 logits (softmax / CE 由调用方做):                    #
+        #       return logits                                                    #
+        ##########################################################################
+
         # [*, N, N, no_bins]
         logits = self.linear(z)
         logits = logits + logits.transpose(-2, -3)
         return logits
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
