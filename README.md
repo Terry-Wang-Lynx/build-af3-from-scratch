@@ -44,6 +44,31 @@ python prepare_tutorials.py          # solutions/* → tutorials/*
 python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
 ```
 
+## 单元测试 (control values)
+
+每章 `control_values/` 下保存了一套小尺寸的参考张量 (`*.pt`)，配合
+`runtime/checks.py` 里的 `test_module_shape` / `test_module_forward`，
+学生可以按章 / 按函数验证自己的实现：
+
+- 测试时把模块参数临时替换成 `torch.linspace(-1, 1, numel)`，再用固定
+  的 `test_inputs` 跑前向，输出与 `<name>_out.pt` 对照；参数 shape 也
+  会与 `<name>_param_shapes.pt` 对照。
+- `solutions/<chapter>/control_values/_generate.py` 既能生成参考值
+  (`overwrite=True`)，也能回归校验 (`overwrite=False`)。
+- 仓库根目录有顶层入口 `generate_control_values.py`：
+
+```bash
+# 用 solutions/ 重新生成全部参考 .pt
+python generate_control_values.py
+
+# 用 tutorials/ 验证自己的实现 (未填空时会失败)
+python generate_control_values.py --verify --src tutorials
+```
+
+每个 `.pt` 都很小 (KB 级)，已和源代码一起提交进 GitHub。`prepare_tutorials.py`
+会把 `control_values/` 整目录拷到 `tutorials/`，因此学生 fork 后可以
+立刻开始函数级测试。
+
 ## 快速开始
 
 ### 1. 安装

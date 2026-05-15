@@ -85,6 +85,14 @@ FOLDER_COPY_PATHS: list[str] = [
     "confidence",  # the __init__.py + helpers students don't reimplement
     "feature_extraction",
     "examples",
+    # Per-chapter control values + test helpers — students need both the
+    # .pt artifacts and the *_checks.py / _generate.py drivers.
+    # 各章 control_values + 测试驱动 (.pt 参考 + checks.py + _generate.py)。
+    "attention/control_values",
+    "pairformer/control_values",
+    "feature_embedding/control_values",
+    "diffusion/control_values",
+    "confidence/control_values",
 ]
 
 

@@ -45,6 +45,34 @@ python prepare_tutorials.py          # solutions/* → tutorials/*
 python prepare_tutorials.py --clean  # wipe tutorials/ first
 ```
 
+## Per-module unit tests (control values)
+
+Each chapter ships a small set of reference tensors under
+`control_values/`. Together with `runtime/checks.py`
+(`test_module_shape`, `test_module_forward`) they let students validate
+each function on its own:
+
+- Module parameters are temporarily replaced with
+  `torch.linspace(-1, 1, numel)`. The module is then run on a fixed
+  `test_inputs` and the output is compared to `<name>_out.pt`.
+  Parameter shapes are compared to `<name>_param_shapes.pt`.
+- `solutions/<chapter>/control_values/_generate.py` both writes the
+  reference files (`overwrite=True`) and verifies against them
+  (`overwrite=False`).
+- A single top-level entry point at the repo root:
+
+```bash
+# Regenerate every reference .pt from solutions/.
+python generate_control_values.py
+
+# Verify your tutorials/ implementation (will fail until filled in).
+python generate_control_values.py --verify --src tutorials
+```
+
+The `.pt` files are tiny (KB-sized) and committed alongside the source.
+`prepare_tutorials.py` copies the whole `control_values/` tree into
+`tutorials/`, so a fresh clone can run function-level tests immediately.
+
 ## Quickstart
 
 ### 1. Install
