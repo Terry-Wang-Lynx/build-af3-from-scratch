@@ -2,14 +2,13 @@
 
 [English version](README.en.md)
 
-一个面向教学、对 Mac 友好的 **AlphaFold 3** 复现项目。沿用
-[alphafold-decoded](https://github.com/kilianmandon/alphafold-decoded)（AF2 版）
-按章节拆分的写法，但目标换成 AF3 架构和权重。可直接加载字节跳动 **Protenix**
-官方 checkpoint，CPU / Apple Silicon MPS / CUDA 都能跑。
+一个面向教学、对 Mac 友好的 **AlphaFold 3** 复现项目。按章节拆分的 Python 包结构，
+可直接加载字节跳动 **Protenix** 官方 checkpoint，CPU / Apple Silicon MPS / CUDA
+都能跑。
 
 ## 项目结构
 
-照搬参考项目的三部分结构：
+项目按三个目录组织：
 
 ```
 build-af3-from-scratch/
@@ -28,7 +27,7 @@ build-af3-from-scratch/
 ```
 
 每一章都是一个 *flat Python package*，章内文件之间用
-`from <chapter>.<file> import <Class>` 互相 import —— 与 AF2 参考完全一致。
+`from <chapter>.<file> import <Class>` 互相 import。
 
 ## 三件套：solutions / tutorials / lessons
 
@@ -41,23 +40,9 @@ build-af3-from-scratch/
 重新生成填空版：
 
 ```bash
-python prepare_tutorials.py        # solutions/* → tutorials/*
+python prepare_tutorials.py          # solutions/* → tutorials/*
 python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
 ```
-
-## 为什么要做 AF3 版？
-
-AF3 在架构上有几个关键变化，没法直接复用 AF2 那一套章节：
-
-| AF2 章节              | AF3 对应                                  |
-|-----------------------|-------------------------------------------|
-| `evoformer`           | `pairformer`（+ `msa_stack`）              |
-| `structure_module`    | `diffusion`                               |
-| `feature_embedding`   | + AtomAttentionEncoder                    |
-| `geometry`            | 大部分融进 diffusion module               |
-
-中间几章因此和 AF2 不同，但底层 primitives（attention / residual / axial ops）
-还是同一套。
 
 ## 快速开始
 
@@ -174,7 +159,7 @@ notebook 走完一整圈：构建模型 → 加载权重 → 特征化 → 推�
 ## 致谢
 
 - **字节跳动 Protenix** —— AF3 架构实现 + 开源权重。
-- **`alphafold-decoded`**（Kilian Mandon）—— 按章节拆分的教学结构。
+- **`alphafold-decoded`**（Kilian Mandon，AF2 教学项目）—— 教学结构灵感来源。
 - **DeepMind** —— AlphaFold 3 论文。
 
 ## License

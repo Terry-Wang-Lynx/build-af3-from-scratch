@@ -1,9 +1,9 @@
 """
 Generate the student-facing `tutorials/` tree from the reference `solutions/`.
 
-Each `TODO ... END OF YOUR CODE` block in solutions/ is replaced by
-`pass`, mirroring how the AF2 reference (alphafold-decoded) prepares its
-tutorial notebooks.
+Each `TODO ... END OF YOUR CODE` block in solutions/ has its body replaced
+by `pass`; the TODO pseudocode stays in place so students can fill in the
+implementation step by step. Non-stubbed files are copied verbatim.
 
 Run from the project root:
 
@@ -89,7 +89,7 @@ FOLDER_COPY_PATHS: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# TODO-block excision (copied + adapted from alphafold-decoded)
+# TODO-block excision
 # ---------------------------------------------------------------------------
 def parse_file(src: Path, dst: Path) -> None:
     """Read src, replace every TODO block with `pass`, write dst."""

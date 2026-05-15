@@ -2,15 +2,14 @@
 
 [中文版 README](README.md)
 
-An educational, Mac-friendly **AlphaFold 3** reimplementation, built in the
-same chapter-by-chapter format as
-[alphafold-decoded](https://github.com/kilianmandon/alphafold-decoded) (AF2)
-but targeting AF3 architecture and weights. Loads the official **ByteDance
-Protenix** checkpoints unchanged; runs on CPU, Apple-Silicon MPS, or CUDA.
+An educational, Mac-friendly **AlphaFold 3** reimplementation. A
+chapter-by-chapter Python package layout that loads the official
+**ByteDance Protenix** checkpoints unchanged; runs on CPU, Apple-Silicon
+MPS, or CUDA.
 
 ## Project layout
 
-Mirrors the reference's three-fold structure:
+The project is organized into three top-level folders:
 
 ```
 build-af3-from-scratch/
@@ -29,8 +28,7 @@ build-af3-from-scratch/
 ```
 
 Each chapter is a flat Python package; intra-chapter imports use the
-fully-qualified form `from <chapter>.<file> import <Class>`, identical to
-the AF2 reference.
+fully-qualified form `from <chapter>.<file> import <Class>`.
 
 ## The three companion folders
 
@@ -46,20 +44,6 @@ Regenerate the blanks:
 python prepare_tutorials.py          # solutions/* → tutorials/*
 python prepare_tutorials.py --clean  # wipe tutorials/ first
 ```
-
-## Why an AF3 version?
-
-AF3 introduces architectural changes that don't fit the AF2 mold:
-
-| AF2 chapter           | AF3 equivalent                            |
-|-----------------------|-------------------------------------------|
-| `evoformer`           | `pairformer` (+ `msa_stack`)              |
-| `structure_module`    | `diffusion`                               |
-| `feature_embedding`   | + AtomAttentionEncoder                    |
-| `geometry`            | mostly absorbed into the diffusion module |
-
-The middle chapters therefore differ from AF2, but the low-level primitives
-(attention / residual / axial ops) are the same.
 
 ## Quickstart
 
@@ -182,8 +166,8 @@ faster.
 ## Acknowledgements
 
 - **ByteDance Protenix** — AF3 architecture implementation and open weights.
-- **`alphafold-decoded`** by Kilian Mandon — the chapter-by-chapter
-  pedagogical format.
+- **`alphafold-decoded`** by Kilian Mandon (AF2 educational project) — the
+  inspiration for the chapter-by-chapter pedagogical layout.
 - **DeepMind** — AlphaFold 3 paper.
 
 ## License
