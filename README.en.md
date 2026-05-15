@@ -88,16 +88,22 @@ Recommended 6-step path. Each chapter takes ~0.5–2 hours.
 
    | Step | Chapter | Notebook | What you build |
    |---|---|---|---|
+   | 0 | `feature_extraction/` | `feature_extraction.ipynb` | **Read-only** tour: JSON → feature dict |
    | 1 | `attention/` | `attention.ipynb` | Linear / LayerNorm / MHA / AdaLN / Transition / AttentionPairBias |
    | 2 | `pairformer/` | `pairformer.ipynb` | OuterProductMean / TriangleMul / TriangleAttention / MSAPairWeightedAveraging / PairformerBlock |
    | 3 | `feature_embedding/` | `feature_embedding.ipynb` | RelativePositionEncoding / FourierEmbedding |
-   | 4 | `diffusion/` | `diffusion.ipynb` | ConditionedTransitionBlock / DiffusionTransformerBlock / DiffusionTransformer |
+   | 4 | `diffusion/` | `diffusion.ipynb` | ConditionedTransitionBlock / DiffusionTransformerBlock / DiffusionTransformer / expressCoordinatesInFrame / centre_random_augmentation |
    | 5 | `confidence/` | `confidence.ipynb` | DistogramHead |
    | 6 | `model/` | `overview.ipynb` | End-to-end: load Protenix weights, run inference, write CIF |
 
 4. **Sanity check after each chapter**:
    ```bash
    python generate_control_values.py --verify --src tutorials --chapters <chapter>
+   ```
+
+   To run every notebook in one shot:
+   ```bash
+   python check_solutions.py --src tutorials
    ```
 
 5. **Run end-to-end.** Once every blank is filled in, download the

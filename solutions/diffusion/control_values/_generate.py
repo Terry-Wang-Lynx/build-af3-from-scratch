@@ -17,6 +17,8 @@ from diffusion.diffusion_transformer import (  # noqa: E402
     DiffusionTransformer,
     DiffusionTransformerBlock,
 )
+from diffusion.frames import expressCoordinatesInFrame  # noqa: E402
+from model.utils import centre_random_augmentation  # noqa: E402
 
 from diffusion.control_values.diffusion_checks import (  # noqa: E402
     CONTROL_FOLDER,
@@ -88,6 +90,44 @@ def main(overwrite: bool = True) -> None:
         method=lambda a, s, z: dt(a=a, s=s, z=z),
         overwrite_results=overwrite,
     )
+
+    # ----- expressCoordinatesInFrame (Algorithm 29) ------------------------
+    # Pure function (no learnable params) — save the output directly and
+    # compare bit-wise.
+    # 纯函数（无参数）—— 直接保存输出做位级比较。
+    with torch.no_grad():
+        ecf_out = expressCoordinatesInFrame(
+            test_inputs["coords"].double(),
+            test_inputs["frame_atoms"].double(),
+        )
+    ecf_path = os.path.join(CONTROL_FOLDER, "express_coordinates_in_frame_out.pt")
+    if overwrite:
+        torch.save(ecf_out, ecf_path)
+    else:
+        expected = torch.load(ecf_path)
+        assert torch.allclose(ecf_out, expected), (
+            "expressCoordinatesInFrame output mismatch"
+        )
+
+    # ----- centre_random_augmentation (Algorithm 19, centre_only path) ----
+    # The full path samples a random rotation and translation, which is hard
+    # to reproduce bit-wise. We only check the deterministic centre_only=True
+    # branch.
+    # 完整路径用随机旋转/平移，难以位级复现；这里只测确定性的 centre_only 分支。
+    with torch.no_grad():
+        cra_out = centre_random_augmentation(
+            test_inputs["coords"].double(),
+            N_sample=2,
+            centre_only=True,
+        )
+    cra_path = os.path.join(CONTROL_FOLDER, "centre_random_augmentation_centre_only_out.pt")
+    if overwrite:
+        torch.save(cra_out, cra_path)
+    else:
+        expected = torch.load(cra_path)
+        assert torch.allclose(cra_out, expected), (
+            "centre_random_augmentation(centre_only=True) output mismatch"
+        )
 
     if overwrite:
         print(f"Wrote control values under {CONTROL_FOLDER}")

@@ -49,6 +49,120 @@ def centre_random_augmentation(
             [..., N_sample, N_atom, 3]
     """
 
+    ##########################################################################
+    # TODO: Algorithm 19 — recentre + random rotate + random translate. The  #
+    #   first move is **always** "subtract the centre of mass" (it cancels  #
+    #   any constant shift in the trunk-supplied geometry); on top of that, #
+    #   ``centre_only=False`` adds a random SE(3) augmentation per sample.  #
+    #                                                                        #
+    #   Step 1 — Read shapes / device:                                       #
+    #       N_atom = x_input_coords.size(-2)                                 #
+    #       device = x_input_coords.device                                   #
+    #                                                                        #
+    #   Step 2 — Subtract the (possibly masked) centre of mass so the cloud #
+    #     is centred at origin:                                              #
+    #       if mask is None:                                                 #
+    #           x_input_coords = x_input_coords - torch.mean(                #
+    #               input=x_input_coords, dim=-2, keepdim=True)              #
+    #       else:                                                            #
+    #           center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(     #
+    #               dim=-2) / (mask.sum(dim=-1) + eps)                       #
+    #           x_input_coords = x_input_coords - center.unsqueeze(dim=-2)   #
+    #                                                                        #
+    #   Step 3 — Make ``N_sample`` copies by inserting a length-N_sample     #
+    #     axis at position -3:                                               #
+    #       x_input_coords = expand_at_dim(                                  #
+    #           x_input_coords, dim=-3, n=N_sample)                          #
+    #                                                                        #
+    #   Step 4 — Early-exit for the centre-only path (no augmentation):     #
+    #       if centre_only:                                                  #
+    #           return x_input_coords                                        #
+    #                                                                        #
+    #   Step 5 — Sample one random rotation and one random translation per  #
+    #     (batch, sample). N_augment = batch_size * N_sample is the total   #
+    #     number of (rot, trans) pairs we need:                              #
+    #       N_augment = torch.numel(x_input_coords[..., 0, 0])              #
+    #       batch_size_shape = x_input_coords.shape[:-3]                    #
+    #       rot_matrix_random = (                                            #
+    #           uniform_random_rotation(N_sample=N_augment)                  #
+    #           .to(device)                                                  #
+    #           .reshape(*batch_size_shape, N_sample, 3, 3)                  #
+    #       ).detach()                                                       #
+    #       trans_random = s_trans * torch.randn(                            #
+    #           size=(*batch_size_shape, N_sample, 3), device=device)        #
+    #                                                                        #
+    #   Step 6 — Apply rotation then translation to each (sample, atom):    #
+    #     ``rot_vec_mul`` is a batched R · t. Expand the rotation matrix    #
+    #     across the atom axis so it broadcasts:                             #
+    #       x_augment_coords = (                                             #
+    #           rot_vec_mul(                                                 #
+    #               r=expand_at_dim(rot_matrix_random, dim=-3, n=N_atom),   #
+    #               t=x_input_coords,                                        #
+    #           )                                                            #
+    #           + trans_random[..., None, :]                                 #
+    #       )                                                                #
+    #                                                                        #
+    #   Step 7 — Re-apply the mask (rotation moves masked atoms but we want #
+    #     them zero-valued downstream):                                     #
+    #       if mask is not None:                                             #
+    #           x_augment_coords = (                                         #
+    #               x_augment_coords * mask[..., None, :, None])             #
+    #       return x_augment_coords                                          #
+    #                                                                        #
+    # TODO: 算法 19 —— 居中 + 随机旋转 + 随机平移。第一步**永远**先减质心       #
+    #   (抵消主干几何里任意常数偏移)；                                          #
+    #   ``centre_only=False`` 时再叠加一组随机 SE(3) 增广。                    #
+    #                                                                        #
+    #   步骤 1 — 形状 / device:                                                #
+    #       N_atom = x_input_coords.size(-2)                                 #
+    #       device = x_input_coords.device                                   #
+    #                                                                        #
+    #   步骤 2 — 减 (可能加 mask 的) 质心，使坐标云对齐到原点:                  #
+    #       if mask is None:                                                 #
+    #           x_input_coords = x_input_coords - torch.mean(                #
+    #               input=x_input_coords, dim=-2, keepdim=True)              #
+    #       else:                                                            #
+    #           center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(     #
+    #               dim=-2) / (mask.sum(dim=-1) + eps)                       #
+    #           x_input_coords = x_input_coords - center.unsqueeze(dim=-2)   #
+    #                                                                        #
+    #   步骤 3 — 在 -3 位置插入 N_sample 维复制 N_sample 份:                    #
+    #       x_input_coords = expand_at_dim(                                  #
+    #           x_input_coords, dim=-3, n=N_sample)                          #
+    #                                                                        #
+    #   步骤 4 — centre-only 路径直接返回:                                      #
+    #       if centre_only:                                                  #
+    #           return x_input_coords                                        #
+    #                                                                        #
+    #   步骤 5 — 对每 (batch, sample) 抽一组 (rot, trans)。                    #
+    #     N_augment = batch_size * N_sample:                                  #
+    #       N_augment = torch.numel(x_input_coords[..., 0, 0])              #
+    #       batch_size_shape = x_input_coords.shape[:-3]                    #
+    #       rot_matrix_random = (                                            #
+    #           uniform_random_rotation(N_sample=N_augment)                  #
+    #           .to(device)                                                  #
+    #           .reshape(*batch_size_shape, N_sample, 3, 3)                  #
+    #       ).detach()                                                       #
+    #       trans_random = s_trans * torch.randn(                            #
+    #           size=(*batch_size_shape, N_sample, 3), device=device)        #
+    #                                                                        #
+    #   步骤 6 — 先旋转再平移。``rot_vec_mul`` 是批量 R · t；旋转矩阵沿原子      #
+    #     维展开以便广播:                                                       #
+    #       x_augment_coords = (                                             #
+    #           rot_vec_mul(                                                 #
+    #               r=expand_at_dim(rot_matrix_random, dim=-3, n=N_atom),   #
+    #               t=x_input_coords,                                        #
+    #           )                                                            #
+    #           + trans_random[..., None, :]                                 #
+    #       )                                                                #
+    #                                                                        #
+    #   步骤 7 — mask 后处理 (被旋转后仍想让 mask=0 处置零):                    #
+    #       if mask is not None:                                             #
+    #           x_augment_coords = (                                         #
+    #               x_augment_coords * mask[..., None, :, None])             #
+    #       return x_augment_coords                                          #
+    ##########################################################################
+
     N_atom = x_input_coords.size(-2)
     device = x_input_coords.device
 
@@ -92,6 +206,10 @@ def centre_random_augmentation(
     if mask is not None:
         x_augment_coords = x_augment_coords * mask[..., None, :, None]
     return x_augment_coords
+
+    ##########################################################################
+    #               END OF YOUR CODE                                         #
+    ##########################################################################
 
 
 # Comment: Rotation.random is not supported by torch.compile()

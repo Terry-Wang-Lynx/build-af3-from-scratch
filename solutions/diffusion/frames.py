@@ -34,6 +34,82 @@ def expressCoordinatesInFrame(
         torch.Tensor: the transformed coordinate projected onto frame basis
             [..., N_frame, N_atom, 3]
     """
+    ##########################################################################
+    # TODO: Algorithm 29 — project ``coordinate`` onto each frame's local    #
+    #   orthonormal basis. Each frame is defined by three atoms (a, b, c)   #
+    #   with ``b`` at the origin.                                            #
+    #                                                                        #
+    #   Step 1 — Unbind the three frame atoms along the second-to-last axis.#
+    #     The middle one ``b`` is the origin; ``a`` and ``c`` define the    #
+    #     in-plane directions:                                               #
+    #       a, b, c = torch.unbind(frames, dim=-2)                           #
+    #                                       # each: [..., N_frame, 3]       #
+    #                                                                        #
+    #   Step 2 — Two raw direction vectors from ``b`` to ``a`` and ``c``,    #
+    #     normalized (eps guards near-zero norms):                           #
+    #       w1 = F.normalize(a - b, dim=-1, eps=eps)                         #
+    #       w2 = F.normalize(c - b, dim=-1, eps=eps)                         #
+    #                                                                        #
+    #   Step 3 — Build an orthonormal basis (e1, e2, e3). Using the sum and  #
+    #     difference of w1 / w2 makes the basis insensitive to the           #
+    #     individual lengths and gives a numerically stable Gram-Schmidt:    #
+    #       e1 = F.normalize(w1 + w2, dim=-1, eps=eps)                       #
+    #       e2 = F.normalize(w2 - w1, dim=-1, eps=eps)                       #
+    #       e3 = torch.cross(e1, e2, dim=-1)            # [..., N_frame, 3] #
+    #                                                                        #
+    #   Step 4 — Broadcast every input atom relative to each frame's origin  #
+    #     ``b``. Insert a query-atom axis so ``d[..., f, i, :]`` is the      #
+    #     displacement of atom ``i`` from the origin of frame ``f``:         #
+    #       d = coordinate[..., None, :, :] - b[..., None, :]               #
+    #                                       # [..., N_frame, N_atom, 3]     #
+    #                                                                        #
+    #   Step 5 — Project each displacement onto (e1, e2, e3) by inner        #
+    #     product on the last dim:                                           #
+    #       x_transformed = torch.cat(                                       #
+    #           [                                                            #
+    #               torch.sum(d * e1[..., None, :], dim=-1, keepdim=True),  #
+    #               torch.sum(d * e2[..., None, :], dim=-1, keepdim=True),  #
+    #               torch.sum(d * e3[..., None, :], dim=-1, keepdim=True),  #
+    #           ],                                                            #
+    #           dim=-1,                                                       #
+    #       )                                       # [..., N_frame, N_atom, 3]#
+    #       return x_transformed                                              #
+    #                                                                        #
+    # TODO: 算法 29 —— 把 ``coordinate`` 投影到每个 frame 的局部正交基上。     #
+    #   每个 frame 由 3 个原子 (a, b, c) 定义，b 作为局部原点。                #
+    #                                                                        #
+    #   步骤 1 — 沿倒数第二维拆出三个 frame 原子。中间的 ``b`` 是原点；         #
+    #     ``a`` / ``c`` 给出在平面上的两个方向:                                #
+    #       a, b, c = torch.unbind(frames, dim=-2)                           #
+    #                                       # 形状: [..., N_frame, 3]       #
+    #                                                                        #
+    #   步骤 2 — b -> a 与 b -> c 两条方向向量并归一化 (eps 保护近零模长):     #
+    #       w1 = F.normalize(a - b, dim=-1, eps=eps)                         #
+    #       w2 = F.normalize(c - b, dim=-1, eps=eps)                         #
+    #                                                                        #
+    #   步骤 3 — 构造正交基 (e1, e2, e3)。用 w1/w2 的和差代替直接 Gram-Schmidt #
+    #     可让结果对个体长度不敏感、数值更稳:                                  #
+    #       e1 = F.normalize(w1 + w2, dim=-1, eps=eps)                       #
+    #       e2 = F.normalize(w2 - w1, dim=-1, eps=eps)                       #
+    #       e3 = torch.cross(e1, e2, dim=-1)            # [..., N_frame, 3] #
+    #                                                                        #
+    #   步骤 4 — 输入坐标相对每个 frame 原点 ``b`` 求位移，                     #
+    #     插入查询原子轴使 ``d[..., f, i, :]`` 表示原子 i 相对 frame f 的位移: #
+    #       d = coordinate[..., None, :, :] - b[..., None, :]               #
+    #                                       # [..., N_frame, N_atom, 3]     #
+    #                                                                        #
+    #   步骤 5 — 把每条位移分别投影到 (e1, e2, e3) 上，沿最后一维内积:          #
+    #       x_transformed = torch.cat(                                       #
+    #           [                                                            #
+    #               torch.sum(d * e1[..., None, :], dim=-1, keepdim=True),  #
+    #               torch.sum(d * e2[..., None, :], dim=-1, keepdim=True),  #
+    #               torch.sum(d * e3[..., None, :], dim=-1, keepdim=True),  #
+    #           ],                                                            #
+    #           dim=-1,                                                       #
+    #       )                                                                 #
+    #       return x_transformed                                              #
+    ##########################################################################
+
     # Extract frame atoms
     a, b, c = torch.unbind(frames, dim=-2)  # a, b, c shape: [..., N_frame, 3]
     w1 = F.normalize(a - b, dim=-1, eps=eps)
@@ -53,6 +129,10 @@ def expressCoordinatesInFrame(
         dim=-1,
     )  # [..., N_frame, N_atom, 3]
     return x_transformed
+
+    ##########################################################################
+    #               END OF YOUR CODE                                         #
+    ##########################################################################
 
 
 def gather_frame_atom_by_indices(

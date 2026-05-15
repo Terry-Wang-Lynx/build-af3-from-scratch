@@ -601,12 +601,45 @@ def build_diffusion() -> nbformat.NotebookNode:
             "print('DiffusionTransformer ✓')"
         ),
 
+        # --- Geometry helpers ---
+        section_md(
+            "## 4.4 几何 helper · `expressCoordinatesInFrame` + `centre_random_augmentation`\n\n"
+            "AF3 把刚体 / 帧的几何运算直接放进扩散里。两个最常用的函数:\n\n"
+            "- **`diffusion/frames.py::expressCoordinatesInFrame`** (算法 29) —— "
+            "  把每个原子坐标投影到由 3 个原子定义的局部正交基上。Confidence head 计算 PAE 用它。\n"
+            "- **`model/utils.py::centre_random_augmentation`** (算法 19) —— "
+            "  扩散采样的每一步都先 recentre (减质心) 再随机刚体增广。\n\n"
+            "打开这两个文件填好 TODO。随机分支在采样器里使用，无法位级复现；"
+            "这里我们只测确定性的部分: `expressCoordinatesInFrame` 全部 + "
+            "`centre_random_augmentation(centre_only=True)`。"
+        ),
+        section_code(
+            "from diffusion.frames import expressCoordinatesInFrame\n"
+            "from model.utils import centre_random_augmentation\n"
+            "from diffusion.control_values.diffusion_checks import test_inputs\n\n"
+            "# expressCoordinatesInFrame (Algorithm 29)\n"
+            "out = expressCoordinatesInFrame(\n"
+            "    test_inputs['coords'].double(),\n"
+            "    test_inputs['frame_atoms'].double(),\n"
+            ")\n"
+            "expected = torch.load(f'{control_folder}/express_coordinates_in_frame_out.pt')\n"
+            "assert torch.allclose(out, expected), 'expressCoordinatesInFrame output mismatch'\n"
+            "print('expressCoordinatesInFrame ✓')\n\n"
+            "# centre_random_augmentation, deterministic centre_only=True branch\n"
+            "out = centre_random_augmentation(\n"
+            "    test_inputs['coords'].double(), N_sample=2, centre_only=True,\n"
+            ")\n"
+            "expected = torch.load(f'{control_folder}/centre_random_augmentation_centre_only_out.pt')\n"
+            "assert torch.allclose(out, expected), 'centre_random_augmentation(centre_only=True) output mismatch'\n"
+            "print('centre_random_augmentation (centre_only) ✓')"
+        ),
+
         section_md(
             "## 章节小结\n\n"
-            "本章实现了 AF3 扩散主干所需的 Transformer 三件套。剩下的两块——"
-            "DiffusionConditioning (算法 21)、DiffusionModule (算法 20 EDM scaling) "
-            "以及顶层 `sample_diffusion` (算法 18)——都已经写好详细的 TODO 伪代码, "
-            "学完后续 notebook 后端到端推理就会一次跑通。"
+            "本章实现了 AF3 扩散主干所需的 Transformer 三件套 + 两个高频几何 helper。"
+            "剩下的部分 —— DiffusionConditioning (算法 21)、DiffusionModule "
+            "(算法 20 EDM scaling) 以及顶层 `sample_diffusion` (算法 18) —— 都已经"
+            "写好详细的 TODO 伪代码，学完后续 notebook 后端到端推理就会一次跑通。"
         ),
     ]
     return nb

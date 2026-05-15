@@ -85,15 +85,18 @@ python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
 
    | 顺序 | 章节 | notebook | 主要内容 |
    |---|---|---|---|
+   | 0 | `feature_extraction/` | `feature_extraction.ipynb` | **只读** walkthrough：JSON → 张量字典 |
    | 1 | `attention/` | `attention.ipynb` | Linear / LayerNorm / MHA / AdaLN / Transition / AttentionPairBias |
    | 2 | `pairformer/` | `pairformer.ipynb` | OuterProductMean / TriangleMul / TriangleAttention / MSAPairWeightedAveraging / PairformerBlock |
    | 3 | `feature_embedding/` | `feature_embedding.ipynb` | RelativePositionEncoding / FourierEmbedding |
-   | 4 | `diffusion/` | `diffusion.ipynb` | ConditionedTransitionBlock / DiffusionTransformerBlock / DiffusionTransformer |
+   | 4 | `diffusion/` | `diffusion.ipynb` | ConditionedTransitionBlock / DiffusionTransformerBlock / DiffusionTransformer / expressCoordinatesInFrame / centre_random_augmentation |
    | 5 | `confidence/` | `confidence.ipynb` | DistogramHead |
    | 6 | `model/` | `overview.ipynb` | 端到端：加载 Protenix 权重 → 推理 → 出 CIF |
 
 4. **章末自查**：每章末尾对应 `python generate_control_values.py
    --verify --src tutorials --chapters <chapter>` 一行回归检查。
+   也可以用顶层 `python check_solutions.py --src tutorials` 一次性把所有
+   notebook 跑一遍。
 
 5. **跑端到端**：所有空填完以后下载 Protenix 权重（见 "快速开始"），
    打开 `tutorials/model/overview.ipynb` 跑通一次推理，会出 `7r6r_pred.cif`

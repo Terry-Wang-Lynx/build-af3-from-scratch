@@ -45,3 +45,12 @@ feature_shapes = {
     "z":  (N_sample, N_token, N_token, c_z),
 }
 test_inputs = {name: _ramp(shape, i) for i, (name, shape) in enumerate(feature_shapes.items())}
+
+
+# ----- Geometry helpers (Algorithms 19 + 29) -------------------------------
+# Geometry test inputs are independent of the Transformer ones above.
+# 几何 helper 的测试输入与上面的 Transformer 输入相互独立。
+N_atom_geo  = 7
+N_frame_geo = 3
+test_inputs["coords"]      = _ramp((N_atom_geo, 3), 4)
+test_inputs["frame_atoms"] = _ramp((N_frame_geo, 3, 3), 5)
