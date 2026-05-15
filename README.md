@@ -44,6 +44,64 @@ python prepare_tutorials.py          # solutions/* → tutorials/*
 python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
 ```
 
+## 学习路径 · How to use this project
+
+推荐按下面 6 步走，每一章大约 0.5 – 2 小时不等：
+
+1. **拉取仓库 + 生成填空版**
+
+   ```bash
+   git clone https://github.com/Terry-Wang-Lynx/build-af3-from-scratch.git
+   cd build-af3-from-scratch
+   python prepare_tutorials.py --clean
+   ```
+
+   生成出来的 `tutorials/` 就是你的工作目录。`solutions/` 是参考答案，建议
+   不要先翻。
+
+2. **配置环境** （二选一）
+
+   ```bash
+   conda env create -f environment_mac.yml      # Mac / Apple Silicon
+   # 或
+   conda env create -f environment_cpu.yml      # Linux / Mac CPU
+   conda activate af3
+   ```
+
+3. **逐章学习**。每章 `tutorials/<chapter>/<chapter>.ipynb` 都是一份引导
+   笔记本：每个小节先指明要打开哪个 `.py`、要填哪几个 TODO，紧跟着一格
+   测试代码。填好就跑测试 cell：
+
+   ```python
+   test_module_shape(mha, 'mha_gated', control_folder)
+   test_module_forward(mha, 'mha_gated', inputs=(...), ...)
+   ```
+
+   - 通过 → 章节继续往下走。
+   - 不通过 → 测试函数会告诉你哪个输出对不上，回 `.py` 文件改实现，
+     `autoreload` 直接生效，不用重启 kernel。
+
+   推荐顺序：
+
+   | 顺序 | 章节 | notebook | 主要内容 |
+   |---|---|---|---|
+   | 1 | `attention/` | `attention.ipynb` | Linear / LayerNorm / MHA / AdaLN / Transition / AttentionPairBias |
+   | 2 | `pairformer/` | `pairformer.ipynb` | OuterProductMean / TriangleMul / TriangleAttention / MSAPairWeightedAveraging / PairformerBlock |
+   | 3 | `feature_embedding/` | `feature_embedding.ipynb` | RelativePositionEncoding / FourierEmbedding |
+   | 4 | `diffusion/` | `diffusion.ipynb` | ConditionedTransitionBlock / DiffusionTransformerBlock / DiffusionTransformer |
+   | 5 | `confidence/` | `confidence.ipynb` | DistogramHead |
+   | 6 | `model/` | `overview.ipynb` | 端到端：加载 Protenix 权重 → 推理 → 出 CIF |
+
+4. **章末自查**：每章末尾对应 `python generate_control_values.py
+   --verify --src tutorials --chapters <chapter>` 一行回归检查。
+
+5. **跑端到端**：所有空填完以后下载 Protenix 权重（见 "快速开始"），
+   打开 `tutorials/model/overview.ipynb` 跑通一次推理，会出 `7r6r_pred.cif`
+   并报告 pLDDT / pTM。
+
+6. **对答案**：把你写完的实现与 `solutions/` 对比，看看哪里写得不够干净。
+   两边推理输出应一致（state_dict 完全兼容）。
+
 ## 单元测试 (control values)
 
 每章 `control_values/` 下保存了一套小尺寸的参考张量 (`*.pt`)，配合

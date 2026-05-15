@@ -45,6 +45,70 @@ python prepare_tutorials.py          # solutions/* → tutorials/*
 python prepare_tutorials.py --clean  # wipe tutorials/ first
 ```
 
+## How to use this project
+
+Recommended 6-step path. Each chapter takes ~0.5–2 hours.
+
+1. **Clone + generate the blanks**
+
+   ```bash
+   git clone https://github.com/Terry-Wang-Lynx/build-af3-from-scratch.git
+   cd build-af3-from-scratch
+   python prepare_tutorials.py --clean
+   ```
+
+   You'll work inside `tutorials/`. `solutions/` is the answer key —
+   try not to peek beforehand.
+
+2. **Set up the environment** (pick one)
+
+   ```bash
+   conda env create -f environment_mac.yml      # Mac / Apple Silicon
+   # or
+   conda env create -f environment_cpu.yml      # Linux / Mac CPU
+   conda activate af3
+   ```
+
+3. **Walk through chapter notebooks.** Each
+   `tutorials/<chapter>/<chapter>.ipynb` is a guided lab: every section
+   tells you which `.py` to open and which TODOs to fill, followed by a
+   test cell:
+
+   ```python
+   test_module_shape(mha, 'mha_gated', control_folder)
+   test_module_forward(mha, 'mha_gated', inputs=(...), ...)
+   ```
+
+   - Passes → continue.
+   - Fails → the test helper prints which output mismatched. Go back to
+     the `.py`, fix, re-run the cell (autoreload picks it up; no kernel
+     restart needed).
+
+   Recommended order:
+
+   | Step | Chapter | Notebook | What you build |
+   |---|---|---|---|
+   | 1 | `attention/` | `attention.ipynb` | Linear / LayerNorm / MHA / AdaLN / Transition / AttentionPairBias |
+   | 2 | `pairformer/` | `pairformer.ipynb` | OuterProductMean / TriangleMul / TriangleAttention / MSAPairWeightedAveraging / PairformerBlock |
+   | 3 | `feature_embedding/` | `feature_embedding.ipynb` | RelativePositionEncoding / FourierEmbedding |
+   | 4 | `diffusion/` | `diffusion.ipynb` | ConditionedTransitionBlock / DiffusionTransformerBlock / DiffusionTransformer |
+   | 5 | `confidence/` | `confidence.ipynb` | DistogramHead |
+   | 6 | `model/` | `overview.ipynb` | End-to-end: load Protenix weights, run inference, write CIF |
+
+4. **Sanity check after each chapter**:
+   ```bash
+   python generate_control_values.py --verify --src tutorials --chapters <chapter>
+   ```
+
+5. **Run end-to-end.** Once every blank is filled in, download the
+   Protenix checkpoint (see "Quickstart") and open
+   `tutorials/model/overview.ipynb` to run a forward pass; you'll get a
+   `7r6r_pred.cif` plus pLDDT / pTM scores.
+
+6. **Compare with the reference.** Diff your finished `tutorials/`
+   against `solutions/` to spot any rougher edges in your version.
+   Inference output should match (state_dict is fully compatible).
+
 ## Per-module unit tests (control values)
 
 Each chapter ships a small set of reference tensors under
