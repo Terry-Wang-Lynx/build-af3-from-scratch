@@ -654,9 +654,14 @@ class DiffusionModule(nn.Module):
         #       s_ratio = sigma / sigma_data                                    #
         #       c_skip  = 1 / (1 + s_ratio**2)                                  #
         #       c_out   = sigma / torch.sqrt(1 + s_ratio**2)                    #
-        #     (Broadcast each scalar over (N_atom, 3) by ``[..., None, None]``.)#
-        #     Then:                                                              #
-        #       x_denoised = c_skip * x_noisy + c_out * r_update                #
+        #     ``c_skip`` / ``c_out`` are per-sample scalars [..., N_sample] but #
+        #     ``x_noisy`` is [..., N_sample, N_atom, 3]. Insert two trailing    #
+        #     length-1 axes via ``[..., None, None]`` so they broadcast over    #
+        #     (N_atom, 3):                                                       #
+        #       x_denoised = (                                                   #
+        #           c_skip[..., None, None] * x_noisy                            #
+        #           + c_out[..., None, None] * r_update                          #
+        #       )                                                                #
         #   Return ``x_denoised`` (same shape as ``x_noisy``,                   #
         #   [..., N_sample, N_atom, 3]).                                         #
         #                                                                        #
@@ -698,8 +703,14 @@ class DiffusionModule(nn.Module):
         #       s_ratio = sigma / sigma_data                                    #
         #       c_skip  = 1 / (1 + s_ratio**2)                                  #
         #       c_out   = sigma / torch.sqrt(1 + s_ratio**2)                    #
-        #     (用 ``[..., None, None]`` 广播到 (N_atom, 3) 维。)                  #
-        #       x_denoised = c_skip * x_noisy + c_out * r_update                #
+        #     ``c_skip`` / ``c_out`` 是每个样本的标量 [..., N_sample]，而         #
+        #     ``x_noisy`` 是 [..., N_sample, N_atom, 3]。                        #
+        #     在标量后插入两个长度 1 的轴 ``[..., None, None]`` 让它广播到         #
+        #     (N_atom, 3):                                                       #
+        #       x_denoised = (                                                   #
+        #           c_skip[..., None, None] * x_noisy                            #
+        #           + c_out[..., None, None] * r_update                          #
+        #       )                                                                #
         #   返回 ``x_denoised`` (形状同 ``x_noisy``,                              #
         #   [..., N_sample, N_atom, 3])。                                         #
         ##########################################################################

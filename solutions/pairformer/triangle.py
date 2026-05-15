@@ -657,7 +657,12 @@ class TriangleAttention(nn.Module):
         #           ).unsqueeze(-4)                                              #
         #       biases = [mask_bias, triangle_bias]                              #
         #                                                                        #
-        #   Step 5 — Run multi-head attention with chunking if requested:        #
+        #   Step 5 — Run multi-head attention with chunking if requested.        #
+        #     NB: ``self.mha`` here is the OpenFold-style ``Attention`` from     #
+        #     ``pairformer.triangle_ops`` (imported at the top of this file),    #
+        #     NOT the AF3 ``attention.mha.Attention``. It takes a **list** of    #
+        #     biases via the ``biases=`` kwarg (the AF3 one uses a single        #
+        #     ``attn_bias=``). Don't mix them up:                                 #
         #       if chunk_size is not None:                                       #
         #           x = self._chunk(x, biases, chunk_size,                       #
         #                           inplace_safe=inplace_safe)                   #
@@ -695,7 +700,12 @@ class TriangleAttention(nn.Module):
         #           ).unsqueeze(-4)                                              #
         #       biases = [mask_bias, triangle_bias]                              #
         #                                                                        #
-        #   步骤 5 — 多头注意力 (按需 chunk):                                       #
+        #   步骤 5 — 多头注意力 (按需 chunk)。                                       #
+        #     注意: 此处 ``self.mha`` 是文件顶部                                   #
+        #     ``from pairformer.triangle_ops import Attention`` 导入的            #
+        #     OpenFold 风格 ``Attention``，**不是** AF3 的 ``attention.mha.Attention``。 #
+        #     这个类接受 ``biases=`` 参数 (list)，                                  #
+        #     AF3 那个则只接受 ``attn_bias=`` (single)，别弄混:                     #
         #       if chunk_size is not None:                                       #
         #           x = self._chunk(x, biases, chunk_size,                       #
         #                           inplace_safe=inplace_safe)                   #

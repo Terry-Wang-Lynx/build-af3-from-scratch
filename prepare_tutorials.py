@@ -55,6 +55,7 @@ PYTHON_PATHS: list[str] = [
     "feature_embedding/relative_position_encoding.py",
     "feature_embedding/atom_attention.py",
     "feature_embedding/local_attention.py",
+    "feature_embedding/constraint_embedder.py",
     "pairformer/pair_stack.py",
     "pairformer/msa_stack.py",
     "pairformer/template_embedder.py",
@@ -83,6 +84,7 @@ FOLDER_COPY_PATHS: list[str] = [
     "runtime",
     "confidence",  # the __init__.py + helpers students don't reimplement
     "feature_extraction",
+    "examples",
 ]
 
 

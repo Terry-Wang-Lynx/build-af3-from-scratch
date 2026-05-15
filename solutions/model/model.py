@@ -194,11 +194,16 @@ class Protenix(nn.Module):
         #       s_init = self.linear_no_bias_sinit(s_inputs)                    #
         #                                                                        #
         #   Step 4 — Build the initial pair representation by adding three       #
-        #     contributions (broadcast a token-axis projection over the          #
-        #     opposite axis to get an outer-sum):                                #
+        #     contributions. The two ``zinit`` linears project ``s_init`` from   #
+        #     [..., N_tok, c_s] to [..., N_tok, c_z]; we then insert a length-1  #
+        #     axis on opposite sides so the sum is an outer-sum over (i, j).    #
+        #     The ``[..., None, :]`` / ``[..., None, :, :]`` indexing is         #
+        #     equivalent to ``.unsqueeze(-2)`` and ``.unsqueeze(-3)``:           #
         #       z_init = (                                                       #
         #           self.linear_no_bias_zinit1(s_init)[..., None, :]            #
+        #               # [..., N_tok, 1,     c_z]   (broadcasts along j)       #
         #           + self.linear_no_bias_zinit2(s_init)[..., None, :, :]       #
+        #               # [..., 1,     N_tok, c_z]   (broadcasts along i)       #
         #       )                                                                #
         #       z_init = z_init + self.relative_position_encoding(              #
         #           input_feature_dict["relp"])                                 #
@@ -254,10 +259,16 @@ class Protenix(nn.Module):
         #     recycle 后的 single 通道与 pair 外加初始化使用:                       #
         #       s_init = self.linear_no_bias_sinit(s_inputs)                    #
         #                                                                        #
-        #   步骤 4 — 由三部分构造初始 pair 表示 (用 None 维做外加广播):              #
+        #   步骤 4 — 由三部分构造初始 pair 表示。两个 ``zinit`` 线性层把 ``s_init``  #
+        #     从 [..., N_tok, c_s] 投到 [..., N_tok, c_z]；在不同侧插入            #
+        #     长度 1 的维度，得到 (i, j) 的外加和。                                 #
+        #     ``[..., None, :]`` / ``[..., None, :, :]`` 等价于                  #
+        #     ``.unsqueeze(-2)`` / ``.unsqueeze(-3)``:                            #
         #       z_init = (                                                       #
         #           self.linear_no_bias_zinit1(s_init)[..., None, :]            #
+        #               # [..., N_tok, 1,     c_z]   (沿 j 广播)                 #
         #           + self.linear_no_bias_zinit2(s_init)[..., None, :, :]       #
+        #               # [..., 1,     N_tok, c_z]   (沿 i 广播)                 #
         #       )                                                                #
         #       z_init = z_init + self.relative_position_encoding(              #
         #           input_feature_dict["relp"])                                 #
