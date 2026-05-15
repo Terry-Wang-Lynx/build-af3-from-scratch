@@ -1,0 +1,674 @@
+# Copyright 2024 ByteDance and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# Copyright 2021 AlQuraishi Laboratory
+
+import math
+import os
+from functools import partial, partialmethod
+from typing import Callable, List, Optional, Tuple, Union
+
+import numpy as np
+import torch
+import torch.nn as nn
+from scipy.stats import truncnorm
+
+from model.utils import (
+    chunk_layer,
+    flatten_final_dims,
+    is_fp16_enabled,
+    permute_final_dims,
+)
+
+# Teaching version: only the pure-PyTorch LayerNorm is supported. The CUDA
+# fused kernel path has been removed.
+from attention.layer_norm import LayerNorm as _PureLayerNorm  # noqa: F401
+
+
+def _prod(nums: Union[List[int], Tuple[int, ...], torch.Size]) -> int:
+    out = 1
+    for n in nums:
+        out = out * n
+    return out
+
+
+def _calculate_fan(
+    linear_weight_shape: Union[torch.Size, Tuple[int, ...]], fan: str = "fan_in"
+) -> Union[int, float]:
+    fan_out, fan_in = linear_weight_shape
+
+    if fan == "fan_in":
+        f = fan_in
+    elif fan == "fan_out":
+        f = fan_out
+    elif fan == "fan_avg":
+        f = (fan_in + fan_out) / 2
+    else:
+        raise ValueError("Invalid fan option")
+
+    return f
+
+
+def trunc_normal_init_(
+    weights: torch.Tensor, scale: float = 1.0, fan: str = "fan_in"
+) -> None:
+    shape = weights.shape
+    f = _calculate_fan(shape, fan)
+    scale = scale / max(1, f)
+    a = -2
+    b = 2
+    std = math.sqrt(scale) / truncnorm.std(a=a, b=b, loc=0, scale=1)
+    size = _prod(shape)
+    samples = truncnorm.rvs(a=a, b=b, loc=0, scale=std, size=size)
+    samples = np.reshape(samples, shape)
+    with torch.no_grad():
+        weights.copy_(torch.tensor(samples, device=weights.device))
+
+
+def lecun_normal_init_(weights: torch.Tensor) -> None:
+    trunc_normal_init_(weights, scale=1.0)
+
+
+def he_normal_init_(weights: torch.Tensor) -> None:
+    trunc_normal_init_(weights, scale=2.0)
+
+
+def glorot_uniform_init_(weights: torch.Tensor) -> None:
+    nn.init.xavier_uniform_(weights, gain=1)
+
+
+def final_init_(weights: torch.Tensor) -> None:
+    with torch.no_grad():
+        weights.fill_(0.0)
+
+
+def gating_init_(weights: torch.Tensor) -> None:
+    with torch.no_grad():
+        weights.fill_(0.0)
+
+
+def normal_init_(weights: torch.Tensor) -> None:
+    torch.nn.init.kaiming_normal_(weights, nonlinearity="linear")
+
+
+class OpenfoldLinear(nn.Linear):
+    """
+    A Linear layer with built-in nonstandard initializations. Called just
+    like torch.nn.Linear.
+
+    Implements the initializers in 1.11.4, plus some additional ones found
+    in the code.
+
+    Args:
+        in_dim:
+            The final dimension of inputs to the layer
+        out_dim:
+            The final dimension of layer outputs
+        bias:
+            Whether to learn an additive bias. True by default
+        init:
+            The initializer to use. Choose from:
+
+            "default": LeCun fan-in truncated normal initialization
+            "relu": He initialization w/ truncated normal distribution
+            "glorot": Fan-average Glorot uniform initialization
+            "gating": Weights=0, Bias=1
+            "normal": Normal initialization with std=1/sqrt(fan_in)
+            "final": Weights=0, Bias=0
+
+            Overridden by init_fn if the latter is not None.
+        init_fn:
+            A custom initializer taking weight and bias as inputs.
+            Overrides init if not None.
+        precision:
+            Data type for high precision calculation.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        bias: bool = True,
+        init: str = "default",
+        init_fn: Optional[
+            Callable[[torch.Tensor, Optional[torch.Tensor]], None]
+        ] = None,
+        precision: Optional[torch.dtype] = None,
+    ):
+        super(OpenfoldLinear, self).__init__(in_dim, out_dim, bias=bias)
+
+        if bias:
+            with torch.no_grad():
+                self.bias.fill_(0)
+
+        with torch.no_grad():
+            if init_fn is not None:
+                init_fn(self.weight, self.bias)
+            else:
+                if init == "default":
+                    lecun_normal_init_(self.weight)
+                elif init == "relu":
+                    he_normal_init_(self.weight)
+                elif init == "glorot":
+                    glorot_uniform_init_(self.weight)
+                elif init == "gating":
+                    gating_init_(self.weight)
+                    if bias:
+                        self.bias.fill_(1.0)
+                elif init == "normal":
+                    normal_init_(self.weight)
+                elif init == "final":
+                    final_init_(self.weight)
+                else:
+                    raise ValueError("Invalid init string.")
+
+        self.precision = precision
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        d = input.dtype
+        if self.precision is not None:
+            with torch.amp.autocast("cuda", enabled=False):
+                bias = (
+                    self.bias.to(dtype=self.precision)
+                    if self.bias is not None
+                    else None
+                )
+                return nn.functional.linear(
+                    input.to(dtype=self.precision),
+                    self.weight.to(dtype=self.precision),
+                    bias,
+                ).to(dtype=d)
+
+        if d is torch.bfloat16:
+            with torch.amp.autocast("cuda", enabled=False):
+                bias = self.bias.to(dtype=d) if self.bias is not None else None
+                return nn.functional.linear(input, self.weight.to(dtype=d), bias)
+
+        return nn.functional.linear(input, self.weight, self.bias)
+
+
+from attention.layer_norm import OpenFoldLayerNorm, LayerNorm  # noqa: F401,E402
+
+
+@torch.jit.ignore
+def softmax_no_cast(t: torch.Tensor, dim: int = -1) -> torch.Tensor:
+    """
+    Softmax, but without automatic casting to fp32 when the input is of
+    type bfloat16
+    """
+    d = t.dtype
+    if d is torch.bfloat16:
+        with torch.amp.autocast("cuda", enabled=False):
+            s = torch.nn.functional.softmax(t, dim=dim)
+    else:
+        s = torch.nn.functional.softmax(t, dim=dim)
+
+    return s
+
+
+# @torch.jit.script
+def _attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    biases: List[torch.Tensor],
+) -> torch.Tensor:
+    # [*, H, C_hidden, K]
+    key = permute_final_dims(key, (1, 0))
+
+    # [*, H, Q, K]
+    a = torch.matmul(query, key)
+
+    for b in biases:
+        a += b
+
+    a = softmax_no_cast(a, -1)
+
+    # [*, H, Q, C_hidden]
+    a = torch.matmul(a, value)
+
+    return a
+
+
+class Attention(nn.Module):
+    """
+    Standard multi-head attention using AlphaFold's default layer
+    initialization. Allows multiple bias vectors.
+
+    Args:
+        c_q:
+            Input dimension of query data
+        c_k:
+            Input dimension of key data
+        c_v:
+            Input dimension of value data
+        c_hidden:
+            Per-head hidden dimension
+        no_heads:
+            Number of attention heads
+        gating:
+            Whether the output should be gated using query data
+    """
+
+    def __init__(
+        self,
+        c_q: int,
+        c_k: int,
+        c_v: int,
+        c_hidden: int,
+        no_heads: int,
+        gating: bool = True,
+    ) -> None:
+        super(Attention, self).__init__()
+
+        self.c_q = c_q
+        self.c_k = c_k
+        self.c_v = c_v
+        self.c_hidden = c_hidden
+        self.no_heads = no_heads
+        self.gating = gating
+
+        # DISCREPANCY: c_hidden is not the per-head channel dimension, as
+        # stated in the supplement, but the overall channel dimension.
+
+        self.linear_q = OpenfoldLinear(
+            self.c_q, self.c_hidden * self.no_heads, bias=False
+        )
+        self.linear_k = OpenfoldLinear(
+            self.c_k, self.c_hidden * self.no_heads, bias=False
+        )
+        self.linear_v = OpenfoldLinear(
+            self.c_v, self.c_hidden * self.no_heads, bias=False
+        )
+        self.linear_o = OpenfoldLinear(
+            self.c_hidden * self.no_heads, self.c_q, bias=False, init="final"
+        )
+
+        self.linear_g = None
+        if self.gating:
+            self.linear_g = OpenfoldLinear(
+                self.c_q, self.c_hidden * self.no_heads, bias=False, init="gating"
+            )
+
+        self.sigmoid = nn.Sigmoid()
+
+    def _prep_qkv(
+        self, q_x: torch.Tensor, kv_x: torch.Tensor, apply_scale: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # [*, Q/K/V, H * C_hidden]
+        q = self.linear_q(q_x)
+        k = self.linear_k(kv_x)
+        v = self.linear_v(kv_x)
+
+        # [*, Q/K, H, C_hidden]
+        q = q.view(q.shape[:-1] + (self.no_heads, -1))
+        k = k.view(k.shape[:-1] + (self.no_heads, -1))
+        v = v.view(v.shape[:-1] + (self.no_heads, -1))
+
+        # [*, H, Q/K, C_hidden]
+        q = q.transpose(-2, -3)
+        k = k.transpose(-2, -3)
+        v = v.transpose(-2, -3)
+
+        if apply_scale:
+            q /= math.sqrt(self.c_hidden)
+
+        return q, k, v
+
+    def _wrap_up(self, o: torch.Tensor, q_x: torch.Tensor) -> torch.Tensor:
+        if self.linear_g is not None:
+            g = self.sigmoid(self.linear_g(q_x))
+
+            # [*, Q, H, C_hidden]
+            g = g.view(g.shape[:-1] + (self.no_heads, -1))
+            o = o * g
+
+        # [*, Q, H * C_hidden]
+        o = flatten_final_dims(o, 2)
+
+        # [*, Q, C_q]
+        o = self.linear_o(o)
+
+        return o
+
+    def forward(
+        self,
+        q_x: torch.Tensor,
+        kv_x: torch.Tensor,
+        biases: Optional[List[torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            q_x:    [*, Q, C_q] query data
+            kv_x:   [*, K, C_k] key data
+            biases: list of biases broadcastable to [*, H, Q, K]
+        Returns:
+            [*, Q, C_q] attention update
+        """
+        if biases is None:
+            biases = []
+        q, k, v = self._prep_qkv(q_x, kv_x, apply_scale=True)
+        o = _attention(q, k, v, biases)
+        o = o.transpose(-2, -3)
+        return self._wrap_up(o, q_x)
+
+
+class Dropout(nn.Module):
+    """
+    Implementation of dropout with the ability to share the dropout mask
+    along a particular dimension.
+
+    If not in training mode, this module computes the identity function.
+
+    Args:
+        r:
+            Dropout rate
+        batch_dim:
+            Dimension(s) along which the dropout mask is shared
+    """
+
+    def __init__(self, r: float, batch_dim: Union[int, List[int]]):
+        super(Dropout, self).__init__()
+
+        self.r = r
+        if type(batch_dim) == int:
+            batch_dim = [batch_dim]
+        self.batch_dim = batch_dim
+        self.dropout = nn.Dropout(self.r)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x:
+                Tensor to which dropout is applied. Can have any shape
+                compatible with self.batch_dim
+        """
+        shape = list(x.shape)
+        if self.batch_dim is not None:
+            for bd in self.batch_dim:
+                shape[bd] = 1
+        mask = x.new_ones(shape)
+        mask = self.dropout(mask)
+        x = x * mask
+        return x
+
+
+class DropoutRowwise(Dropout):
+    """
+    Convenience class for rowwise dropout as described in subsection
+    1.11.6.
+    """
+
+    __init__ = partialmethod(Dropout.__init__, batch_dim=-3)
+
+
+class DropoutColumnwise(Dropout):
+    """
+    Convenience class for columnwise dropout as described in subsection
+    1.11.6.
+    """
+
+    __init__ = partialmethod(Dropout.__init__, batch_dim=-2)
+
+
+class OuterProductMean(nn.Module):
+    """
+    Implements Algorithm 10.
+
+    Args:
+        c_m:
+            MSA embedding channel dimension
+        c_z:
+            Pair embedding channel dimension
+        c_hidden:
+            Hidden channel dimension
+        eps:
+            Small constant for numerical stability. Defaults to 1e-3.
+    """
+
+    def __init__(self, c_m: int, c_z: int, c_hidden: int, eps: float = 1e-3) -> None:
+        super(OuterProductMean, self).__init__()
+
+        self.c_m = c_m
+        self.c_z = c_z
+        self.c_hidden = c_hidden
+        self.eps = eps
+        ##########################################################################
+        # TODO: OuterProductMean (Algorithm 10) — three sub-modules:             #
+        #                                                                        #
+        #   - Pre-LayerNorm on the MSA channel:                                  #
+        #       self.layer_norm = LayerNorm(c_m)                                #
+        #                                                                        #
+        #   - Two parallel projections from MSA channel ``c_m`` to ``c_hidden``  #
+        #     (no bias). Their outer product fills the c_hidden x c_hidden       #
+        #     block:                                                              #
+        #       self.linear_1 = OpenfoldLinear(c_m, c_hidden, bias=False)        #
+        #       self.linear_2 = OpenfoldLinear(c_m, c_hidden, bias=False)        #
+        #                                                                        #
+        #   - Output projection from the flattened c_hidden**2 block back to    #
+        #     ``c_z``, "final" init (zero-init) so the pair update starts as a  #
+        #     no-op:                                                              #
+        #       self.linear_out = OpenfoldLinear(                                #
+        #           c_hidden**2, c_z, init="final")                              #
+        #                                                                        #
+        # TODO: OuterProductMean (算法 10) —— 三个子模块:                          #
+        #                                                                        #
+        #   - MSA 通道维 Pre-LayerNorm:                                            #
+        #       self.layer_norm = LayerNorm(c_m)                                #
+        #                                                                        #
+        #   - 两路 MSA 通道投影 (c_m -> c_hidden，无 bias)。其外积构成              #
+        #     c_hidden x c_hidden 的块:                                            #
+        #       self.linear_1 = OpenfoldLinear(c_m, c_hidden, bias=False)        #
+        #       self.linear_2 = OpenfoldLinear(c_m, c_hidden, bias=False)        #
+        #                                                                        #
+        #   - 输出投影：把展平后的 c_hidden**2 投回 ``c_z``。"final" 初始化          #
+        #     (零初始化)，使 pair 更新从恒等开始:                                    #
+        #       self.linear_out = OpenfoldLinear(                                #
+        #           c_hidden**2, c_z, init="final")                              #
+        ##########################################################################
+
+        # Replace "pass" statement with your code
+        pass
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
+
+    def _opm(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        ##########################################################################
+        # TODO: The actual outer-product (without the mean — that division by    #
+        #   the mask count is applied by the caller). Inputs have already been   #
+        #   transposed to [*, N_res, N_seq, c_hidden].                            #
+        #                                                                        #
+        #   Step 1 — Outer product over the c_hidden channel, summing over the  #
+        #     MSA axis ``a``:                                                    #
+        #       # 'bac, dae -> bdce':                                            #
+        #       #   outer[*, i, j, c, d] = sum_s a[*, i, s, c] * b[*, j, s, d]   #
+        #       outer = torch.einsum("...bac,...dae->...bdce", a, b)             #
+        #                                       # [*, N_res, N_res, C, C]       #
+        #                                                                        #
+        #   Step 2 — Flatten the c_hidden x c_hidden block to a single feature  #
+        #     dim:                                                                #
+        #       outer = outer.reshape(outer.shape[:-2] + (-1,))                  #
+        #                                       # [*, N_res, N_res, C*C]        #
+        #                                                                        #
+        #   Step 3 — Project to ``c_z``:                                          #
+        #       outer = self.linear_out(outer)   # [*, N_res, N_res, c_z]       #
+        #   Return ``outer``.                                                     #
+        #                                                                        #
+        # TODO: 外积本身 (均值在调用方按 mask 计数除)。输入已被转置成               #
+        #   [*, N_res, N_seq, c_hidden]。                                          #
+        #                                                                        #
+        #   步骤 1 — 沿通道做外积，沿 MSA 轴 ``a`` 求和:                            #
+        #       # 'bac, dae -> bdce':                                            #
+        #       #   outer[*, i, j, c, d] = sum_s a[*, i, s, c] * b[*, j, s, d]   #
+        #       outer = torch.einsum("...bac,...dae->...bdce", a, b)             #
+        #                                       # [*, N_res, N_res, C, C]       #
+        #                                                                        #
+        #   步骤 2 — 把 c_hidden x c_hidden 块展平成单通道:                         #
+        #       outer = outer.reshape(outer.shape[:-2] + (-1,))                  #
+        #                                       # [*, N_res, N_res, C*C]        #
+        #                                                                        #
+        #   步骤 3 — 投到 ``c_z``:                                                 #
+        #       outer = self.linear_out(outer)   # [*, N_res, N_res, c_z]       #
+        #   返回 ``outer``。                                                       #
+        ##########################################################################
+
+        # Replace "pass" statement with your code
+        pass
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
+
+    @torch.jit.ignore
+    def _chunk(self, a: torch.Tensor, b: torch.Tensor, chunk_size: int) -> torch.Tensor:
+        # Since the "batch dim" in this case is not a true batch dimension
+        # (in that the shape of the output depends on it), we need to
+        # iterate over it ourselves
+        a_reshape = a.reshape((-1,) + a.shape[-3:])
+        b_reshape = b.reshape((-1,) + b.shape[-3:])
+        out = []
+        for a_prime, b_prime in zip(a_reshape, b_reshape):
+            outer = chunk_layer(
+                partial(self._opm, b=b_prime),
+                {"a": a_prime},
+                chunk_size=chunk_size,
+                no_batch_dims=1,
+            )
+            out.append(outer)
+
+        # For some cursed reason making this distinction saves memory
+        if len(out) == 1:
+            outer = out[0].unsqueeze(0)
+        else:
+            outer = torch.stack(out, dim=0)
+
+        outer = outer.reshape(a.shape[:-3] + outer.shape[1:])
+
+        return outer
+
+    def _forward(
+        self,
+        m: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        chunk_size: Optional[int] = None,
+        inplace_safe: bool = False,
+    ) -> torch.Tensor:
+        """
+        Args:
+            m:    [*, N_seq, N_res, C_m] MSA embedding.
+            mask: [*, N_seq, N_res]      MSA mask.
+
+        Returns:
+            [*, N_res, N_res, C_z] pair-embedding update.
+        """
+        ##########################################################################
+        # TODO: Algorithm 10 — OuterProductMean. Communicates MSA-derived       #
+        #   per-position features into the pair channel by averaging an outer    #
+        #   product over the MSA dimension.                                     #
+        #                                                                        #
+        #   Step 1 — Default the MSA mask to ones over [*, N_seq, N_res]:        #
+        #       if mask is None:                                                 #
+        #           mask = m.new_ones(m.shape[:-1])                              #
+        #                                                                        #
+        #   Step 2 — Pre-LayerNorm over the channel dim of the MSA tensor:       #
+        #       ln = self.layer_norm(m)                  # [*, N_seq, N_res, c_m]#
+        #                                                                        #
+        #   Step 3 — Two linear projections to ``c_hidden``, each gated by the   #
+        #     MSA mask so masked sequences contribute zero:                      #
+        #       mask = mask.unsqueeze(-1)                # [*, N_seq, N_res, 1]  #
+        #       a = self.linear_1(ln) * mask             # [*, N_seq, N_res, c]  #
+        #       b = self.linear_2(ln) * mask             # [*, N_seq, N_res, c]  #
+        #       del ln                                                            #
+        #     ``linear_1`` / ``linear_2`` are OpenfoldLinear(c_m -> c_hidden,    #
+        #     bias=False); ``linear_out`` projects c_hidden**2 -> c_z (init="final"). #
+        #                                                                        #
+        #   Step 4 — Swap N_seq and N_res so the contraction axis sits inside    #
+        #     the outer product:                                                 #
+        #       a = a.transpose(-2, -3)                  # [*, N_res, N_seq, c]  #
+        #       b = b.transpose(-2, -3)                  # [*, N_res, N_seq, c]  #
+        #                                                                        #
+        #   Step 5 — Outer product across the two residue axes, mean over the    #
+        #     MSA axis (the actual mean comes from dividing by the mask sum      #
+        #     in Step 6). ``_opm`` does the einsum, flattens the c×c block, and #
+        #     applies ``linear_out`` to project back to ``c_z``:                 #
+        #       outer = ( self._chunk(a, b, chunk_size) if chunk_size is not None #
+        #                 else self._opm(a, b) )         # [*, N_res, N_res, c_z]#
+        #     The einsum inside ``_opm`` is                                      #
+        #       'bac,dae->bdce'  i.e. outer_ijcd = sum_s a_isc · b_jsd           #
+        #                                                                        #
+        #   Step 6 — Normalize by the (per-pair) number of unmasked sequences,   #
+        #     with ``self.eps`` for numerical safety:                            #
+        #       norm  = torch.einsum('...abc,...adc->...bdc', mask, mask)        #
+        #                + self.eps                       # [*, N_res, N_res, 1] #
+        #       outer = outer / norm   (or /= when inplace_safe)                 #
+        #   Return ``outer``.                                                    #
+        #                                                                        #
+        # TODO: 算法 10 —— OuterProductMean。                                    #
+        #   通过沿 MSA 维做外积取均值，把 MSA 中的每位点信息汇入 pair 通道。      #
+        #                                                                        #
+        #   步骤 1 — mask 默认为全 1 (形状 [*, N_seq, N_res]):                    #
+        #       if mask is None:                                                 #
+        #           mask = m.new_ones(m.shape[:-1])                              #
+        #                                                                        #
+        #   步骤 2 — 通道维上的 Pre-LayerNorm:                                     #
+        #       ln = self.layer_norm(m)                  # [*, N_seq, N_res, c_m]#
+        #                                                                        #
+        #   步骤 3 — 两路线性投影到 ``c_hidden``，并用 MSA mask 屏蔽:               #
+        #       mask = mask.unsqueeze(-1)                # [*, N_seq, N_res, 1]  #
+        #       a = self.linear_1(ln) * mask             # [*, N_seq, N_res, c]  #
+        #       b = self.linear_2(ln) * mask             # [*, N_seq, N_res, c]  #
+        #       del ln                                                            #
+        #     ``linear_1`` / ``linear_2`` 为                                       #
+        #     OpenfoldLinear(c_m -> c_hidden, bias=False);                        #
+        #     ``linear_out`` 把 c_hidden**2 投回 c_z (init="final")。              #
+        #                                                                        #
+        #   步骤 4 — 交换 N_seq 与 N_res，把 MSA 维移到内侧便于做外积:               #
+        #       a = a.transpose(-2, -3)                  # [*, N_res, N_seq, c]  #
+        #       b = b.transpose(-2, -3)                  # [*, N_res, N_seq, c]  #
+        #                                                                        #
+        #   步骤 5 — 沿两条 residue 轴做外积，再沿 MSA 轴求和；                     #
+        #     ``_opm`` 内部完成 einsum、展平 c×c、并经 ``linear_out`` 投回 c_z:    #
+        #       outer = ( self._chunk(a, b, chunk_size) if chunk_size is not None #
+        #                 else self._opm(a, b) )         # [*, N_res, N_res, c_z]#
+        #     其中 einsum 形式:                                                    #
+        #       'bac,dae->bdce'   即 outer_ijcd = sum_s a_isc · b_jsd            #
+        #                                                                        #
+        #   步骤 6 — 用每个 pair 中未被掩码的序列数做归一化 (+eps):                  #
+        #       norm  = torch.einsum('...abc,...adc->...bdc', mask, mask)        #
+        #                + self.eps                       # [*, N_res, N_res, 1] #
+        #       outer = outer / norm     (inplace_safe 时用 /=)                   #
+        #   返回 ``outer``。                                                       #
+        ##########################################################################
+
+        # Replace "pass" statement with your code
+        pass
+
+        ##########################################################################
+        #               END OF YOUR CODE                                         #
+        ##########################################################################
+        return outer
+
+    def forward(
+        self,
+        m: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        chunk_size: Optional[int] = None,
+        inplace_safe: bool = False,
+    ) -> torch.Tensor:
+        if is_fp16_enabled():
+            with torch.amp.autocast("cuda", enabled=False):
+                return self._forward(m.float(), mask, chunk_size, inplace_safe)
+        else:
+            return self._forward(m, mask, chunk_size, inplace_safe)

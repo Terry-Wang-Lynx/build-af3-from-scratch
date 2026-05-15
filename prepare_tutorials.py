@@ -199,6 +199,9 @@ def main() -> None:
         shutil.copy2(src, dst)
 
     # 4. whole folders
+    _ignore = shutil.ignore_patterns(
+        "__pycache__", "*.py[cod]", ".DS_Store", ".ipynb_checkpoints",
+    )
     for rel in FOLDER_COPY_PATHS:
         src = SOL / rel
         if not src.is_dir():
@@ -206,7 +209,7 @@ def main() -> None:
         dst = TUT / rel
         if dst.exists():
             shutil.rmtree(dst)
-        shutil.copytree(src, dst)
+        shutil.copytree(src, dst, ignore=_ignore)
 
     # 5. per-chapter __init__.py
     for ch in (SOL.iterdir()):
