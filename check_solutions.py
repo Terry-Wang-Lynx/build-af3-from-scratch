@@ -31,15 +31,26 @@ from nbconvert.preprocessors import ExecutePreprocessor
 
 # Ordered the same way as the README's "学习路径" table.
 # 与 README 学习路径表同序。
-NOTEBOOKS = [
+#
+# ``CHAPTER_NOTEBOOKS`` are the per-chapter labs — every one is
+# self-contained and runs in ~10s on CPU without any downloaded weights.
+#
+# ``OVERVIEW_NOTEBOOK`` is the end-to-end demo which **requires** the
+# Protenix checkpoint under ``checkpoints/``. It is opt-in via
+# ``--with-overview`` so a CI / fresh-clone run can be fast and offline.
+#
+# ``CHAPTER_NOTEBOOKS`` 是每章独立的实验，CPU 上各约 10 秒，不需要下载权重。
+# ``OVERVIEW_NOTEBOOK`` 是端到端 demo，**需要** ``checkpoints/`` 下的 Protenix
+# 权重；默认不跑，加 ``--with-overview`` 才执行。
+CHAPTER_NOTEBOOKS = [
     "feature_extraction/feature_extraction.ipynb",  # read-only tour
     "attention/attention.ipynb",
     "pairformer/pairformer.ipynb",
     "feature_embedding/feature_embedding.ipynb",
     "diffusion/diffusion.ipynb",
     "confidence/confidence.ipynb",
-    "model/overview.ipynb",                          # end-to-end demo
 ]
+OVERVIEW_NOTEBOOK = "model/overview.ipynb"
 
 
 def execute(nb_path: Path, cwd: Path, timeout: int) -> tuple[bool, str]:
@@ -69,6 +80,15 @@ def main() -> int:
         help="Subset of chapters (notebook stems) to run. 仅运行指定章节。",
     )
     ap.add_argument(
+        "--with-overview", action="store_true",
+        help="Also run model/overview.ipynb (requires Protenix checkpoint under "
+             "checkpoints/). 一并跑 overview (需要权重)。",
+    )
+    ap.add_argument(
+        "--only-overview", action="store_true",
+        help="Run only model/overview.ipynb. 只跑 overview。",
+    )
+    ap.add_argument(
         "--timeout", type=int, default=600,
         help="Per-cell timeout in seconds. 单 cell 超时时间。",
     )
@@ -86,10 +106,15 @@ def main() -> int:
 
     os.environ["LAYERNORM_TYPE"] = "torch"
 
-    notebooks = NOTEBOOKS
+    if args.only_overview:
+        notebooks = [OVERVIEW_NOTEBOOK]
+    else:
+        notebooks = list(CHAPTER_NOTEBOOKS)
+        if args.with_overview:
+            notebooks.append(OVERVIEW_NOTEBOOK)
     if args.chapters:
         notebooks = [
-            nb for nb in NOTEBOOKS
+            nb for nb in notebooks
             if any(ch in nb for ch in args.chapters)
         ]
         if not notebooks:

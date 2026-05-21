@@ -64,6 +64,7 @@ PYTHON_PATHS: list[str] = [
     "pairformer/dropout.py",
     "diffusion/diffusion_module.py",
     "diffusion/diffusion_transformer.py",
+    "diffusion/frames.py",
     "diffusion/sampler.py",
     "confidence/confidence_head.py",
     "confidence/distogram_head.py",
@@ -211,13 +212,24 @@ def main() -> None:
             shutil.rmtree(dst)
         shutil.copytree(src, dst, ignore=_ignore)
 
-    # 5. per-chapter __init__.py
+    # 5. per-chapter __init__.py.
+    #    Copy verbatim from solutions/ (preserves module-level docstrings),
+    #    falling back to an empty file only when none exists upstream.
+    #    Skip ``examples/`` — it's a data folder, not a Python package, so
+    #    don't fabricate an __init__.py for it.
+    # 复制每章 __init__.py (保留模块级 docstring)；上游不存在则建空文件。
+    # ``examples/`` 是数据目录，不是 Python 包，不要给它造 __init__.py。
+    _skip_init = {"__pycache__", "examples"}
     for ch in (SOL.iterdir()):
-        if ch.is_dir() and ch.name not in {"__pycache__"}:
-            (TUT / ch.name).mkdir(parents=True, exist_ok=True)
-            init = TUT / ch.name / "__init__.py"
-            if not init.exists():
-                init.write_text("")
+        if not ch.is_dir() or ch.name in _skip_init:
+            continue
+        (TUT / ch.name).mkdir(parents=True, exist_ok=True)
+        sol_init = ch / "__init__.py"
+        tut_init = TUT / ch.name / "__init__.py"
+        if sol_init.is_file():
+            shutil.copy2(sol_init, tut_init)
+        elif not tut_init.exists():
+            tut_init.write_text("")
 
     print(f"\nDone. Tutorials written under {TUT}")
 

@@ -8,7 +8,7 @@
 
 Run from the repository root::
 
-    python _build_chapter_notebooks.py
+    python scripts/build_chapter_notebooks.py
 
 This script is not used at runtime — it's only here so the notebooks are
 reproducible. The committed ``.ipynb`` files are what students open.
@@ -22,7 +22,7 @@ import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOL = os.path.join(HERE, "solutions")
 
 
@@ -690,10 +690,33 @@ def build_confidence() -> nbformat.NotebookNode:
         ),
 
         section_md(
+            "## 5.2 ConfidenceHead 装配检查\n\n"
+            "ConfidenceHead 的完整 `forward` / `memory_efficient_forward` 需要一份"
+            "带 atom 级索引映射的特征字典，构造测试输入过于繁琐。这里只用 shape "
+            "检查验证 `ConfidenceHead.__init__` —— 它会构造一个内部 PairformerStack "
+            "+ 四个分类头，任何子模块漏建、命名错、维度错都会暴露。"
+        ),
+        section_code(
+            "from confidence.confidence_head import ConfidenceHead\n"
+            "from confidence.control_values.confidence_checks import test_module_shape\n\n"
+            "ch = ConfidenceHead(\n"
+            "    n_blocks=1,\n"
+            "    c_s=32, c_z=c_z,\n"
+            "    c_s_inputs=32,\n"
+            "    b_pae=8, b_pde=8, b_plddt=10, b_resolved=2,\n"
+            "    max_atoms_per_token=5,\n"
+            "    pairformer_dropout=0.0,\n"
+            "    distance_bin_start=3.25, distance_bin_end=8.25, distance_bin_step=1.25,\n"
+            ")\n"
+            "test_module_shape(ch, 'confidence_head_init', control_folder)\n"
+            "print('ConfidenceHead.__init__ ✓')"
+        ),
+
+        section_md(
             "## 章节小结\n\n"
-            "ConfidenceHead 本身的 `forward` 与 `memory_efficient_forward` 在 `confidence_head.py` 里"
-            "有详细 TODO, 端到端 notebook 会把它们整体跑一遍。本章重点只是让你理解"
-            "DistogramHead 这个最简单的 head 长什么样子。"
+            "本章你写了 DistogramHead 的 forward，并通过 shape 检查校验了 "
+            "ConfidenceHead 的整体装配。完整的 `forward` / `memory_efficient_forward` "
+            "会在端到端 notebook (`model/overview.ipynb`) 里跑到。"
         ),
     ]
     return nb

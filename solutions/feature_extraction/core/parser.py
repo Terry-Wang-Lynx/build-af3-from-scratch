@@ -2517,7 +2517,8 @@ class RecentPDB_MMCIFParser(MMCIFParser):
                 continue
 
             if any([d.get("modified_peptides", False) for d in entity_dicts]):
-                # TODO: Determine whether to delete interfaces of mod res peptides
+                # FUTURE: decide whether to remove interfaces of mod-res peptides.
+                # Not an educational blank.
                 pass
 
             if any([d.get("rare_entity_type", False) for d in entity_dicts]):

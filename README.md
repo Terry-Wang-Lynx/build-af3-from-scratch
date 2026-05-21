@@ -46,7 +46,8 @@ python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
 
 ## 学习路径 · How to use this project
 
-推荐按下面 6 步走，每一章大约 0.5 – 2 小时不等：
+推荐按下面 6 步走，章节本身共 7 个 (chapter 0 是只读 tour)；
+每一章大约 0.5 – 2 小时不等：
 
 1. **拉取仓库 + 生成填空版**
 
@@ -95,8 +96,9 @@ python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
 
 4. **章末自查**：每章末尾对应 `python generate_control_values.py
    --verify --src tutorials --chapters <chapter>` 一行回归检查。
-   也可以用顶层 `python check_solutions.py --src tutorials` 一次性把所有
-   notebook 跑一遍。
+   也可以用顶层 `python check_solutions.py --src tutorials` 一次性跑完六个
+   章节 notebook (默认不跑 overview，避免还没下载权重的同学卡住)；
+   想连同端到端推理一起测就加 `--with-overview`。
 
 5. **跑端到端**：所有空填完以后下载 Protenix 权重（见 "快速开始"），
    打开 `tutorials/model/overview.ipynb` 跑通一次推理，会出 `7r6r_pred.cif`

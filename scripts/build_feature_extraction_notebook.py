@@ -2,7 +2,7 @@
 
 Run from repo root::
 
-    python _build_feature_extraction_notebook.py
+    python scripts/build_feature_extraction_notebook.py
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOL = os.path.join(HERE, "solutions")
 
 

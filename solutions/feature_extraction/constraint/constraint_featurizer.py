@@ -380,7 +380,7 @@ class ConstraintFeatureGenerator:
             "token_coords": [],
         }
         if substructure := constraint_param.get("structure", {}):
-            # TODO parse substructure specifics
+            # FUTURE: parse substructure specifics. Not an educational blank.
             pass
         substructure_featurizer = SubStructureFeaturizer(
             token_array=token_array, atom_array=atom_array

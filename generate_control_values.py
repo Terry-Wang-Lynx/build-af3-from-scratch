@@ -31,6 +31,7 @@ CHAPTERS = (
     "feature_embedding",
     "diffusion",
     "confidence",
+    "model",
 )
 
 

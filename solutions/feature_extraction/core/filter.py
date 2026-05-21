@@ -129,7 +129,7 @@ class Filter(object):
             if (
                 entity_poly_type.get(entity_id, "non-poly")
                 in (
-                    "polypeptide(L)",  # TODO: how to handle polypeptide(D)?
+                    "polypeptide(L)",  # NOTE: polypeptide(D) is not currently handled.
                     "polyribonucleotide",
                     "polydeoxyribonucleotide",
                 )

@@ -47,7 +47,8 @@ python prepare_tutorials.py --clean  # wipe tutorials/ first
 
 ## How to use this project
 
-Recommended 6-step path. Each chapter takes ~0.5–2 hours.
+Recommended 6-step workflow over 7 chapters (chapter 0 is a read-only
+tour). Each chapter takes ~0.5–2 hours.
 
 1. **Clone + generate the blanks**
 
@@ -101,9 +102,11 @@ Recommended 6-step path. Each chapter takes ~0.5–2 hours.
    python generate_control_values.py --verify --src tutorials --chapters <chapter>
    ```
 
-   To run every notebook in one shot:
+   To run every chapter notebook in one shot:
    ```bash
    python check_solutions.py --src tutorials
+   # add --with-overview to also run the end-to-end demo (requires the
+   # Protenix checkpoint under checkpoints/)
    ```
 
 5. **Run end-to-end.** Once every blank is filled in, download the

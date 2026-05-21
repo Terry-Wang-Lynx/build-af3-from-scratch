@@ -165,7 +165,8 @@ def parse_pdb_cluster_file_to_dict(
     Returns:
         dict(str, tuple(str, str)): {pdb_id}_{entity_id} --> [cluster_id, cluster_size]
     """
-    # TODO: cluster the data by ourself only from wwPDB
+    # FUTURE: cluster the data ourselves from wwPDB rather than relying on the
+    # cached file. Not an educational blank — left here as a roadmap note.
     pdb_cluster_dict = {}
     with open(cluster_file) as f:
         for line in f:
