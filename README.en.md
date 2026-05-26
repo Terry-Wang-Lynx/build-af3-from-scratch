@@ -47,8 +47,9 @@ python prepare_tutorials.py --clean  # wipe tutorials/ first
 
 ## How to use this project
 
-Recommended 6-step workflow over 7 chapters (chapter 0 is a read-only
-tour). Each chapter takes ~0.5–2 hours.
+Recommended 6-step workflow over 7 chapters; chapter 0 is a **read-only
+tour** (no blanks to fill), the other six are real labs. Each chapter
+takes ~0.5–2 hours.
 
 1. **Clone + generate the blanks**
 

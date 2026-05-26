@@ -13,6 +13,7 @@ venv_*/
 test_outputs/
 out_dir/
 output/
+out_demo/
 prediction.mmcif
 prediction.cif
 af3_*_out/

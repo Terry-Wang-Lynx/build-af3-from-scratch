@@ -21,16 +21,18 @@ Algorithm numbers.
 
 ## 章节顺序 · Chapter order
 
+Same order as the main README's "学习路径" table — keep these in sync.
+顺序与主 README "学习路径" 表保持一致。
+
 | #  | 章节 · Chapter | 内容 · What it covers | AF3 Alg. |
 |----|----------------|-----------------------|----------|
-| 0  | `series_introduction.md` | 项目概览，AF3 vs AF2     | —        |
-| 1  | `attention.md`           | MHA, LayerNorm, AdaLN, AttentionPairBias | Alg 24 |
-| 2  | `feature_extraction.md`  | JSON → tensors, MSA, templates | — |
-| 3  | `feature_embedding.md`   | InputFeatureEmbedder, AtomAttentionEncoder, Relative PE | Alg 2, 5, 23 |
-| 4  | `pairformer.md`          | Pair stack + MSA module + triangle ops | Alg 8, 10, 11, 12, 13, 14, 16, 17 |
-| 5  | `diffusion.md`           | Diffusion module + transformer + sampler | Alg 18, 21, 23, 25 |
-| 6  | `confidence.md`          | Confidence head + pTM/iPTM/pLDDT | Alg 26-31 |
-| 7  | `model.md`               | Top-level assembly, inference loop | Alg 1 |
+| 0  | `feature_extraction.md`  | JSON → tensors, MSA, templates (read-only tour) | — |
+| 1  | `attention.md`           | MHA, LayerNorm, AdaLN, AttentionPairBias | Alg 11, 24, 26 |
+| 2  | `pairformer.md`          | Pair stack + MSA module + triangle ops | Alg 8, 10, 11, 12, 13, 14, 16, 17 |
+| 3  | `feature_embedding.md`   | InputFeatureEmbedder, AtomAttentionEncoder, Relative PE, Fourier | Alg 2, 3, 5, 22 |
+| 4  | `diffusion.md`           | Diffusion module + transformer + sampler + frames | Alg 18, 19, 20, 21, 23, 25, 29 |
+| 5  | `confidence.md`          | Confidence head + DistogramHead + pTM/iPTM/pLDDT | Alg 1 line 17, 31 |
+| 6  | `model.md`               | Top-level Protenix assembly, inference loop | Alg 1 |
 
 ## 怎么读 · How to use
 
@@ -57,11 +59,10 @@ paper's Algorithm numbers, so the AF3 SI is enough to follow along.
 
 | 章节 | 状态 |
 |------|------|
-| series_introduction | TBD |
-| attention | TBD |
 | feature_extraction | TBD |
-| feature_embedding | TBD |
+| attention | TBD |
 | pairformer | TBD |
+| feature_embedding | TBD |
 | diffusion | TBD |
 | confidence | TBD |
 | model | TBD |
