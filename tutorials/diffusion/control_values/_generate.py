@@ -49,7 +49,7 @@ def main(overwrite: bool = True) -> None:
     torch.manual_seed(0)
 
     # ----- ConditionedTransitionBlock (Algorithm 25) ----------------------
-    ctb = ConditionedTransitionBlock(c_a=c_a, c_s=c_s, n=2, biasinit=-2.0).double()
+    ctb = ConditionedTransitionBlock(c_a=c_a, c_s=c_s, n=2, biasinit=-2.0)
     test_module_shape(ctb, "conditioned_transition_block", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_method(
         ctb, "conditioned_transition_block",
@@ -63,7 +63,7 @@ def main(overwrite: bool = True) -> None:
     # ----- DiffusionTransformerBlock (Algorithm 23 lines 2-3) -------------
     dtb = DiffusionTransformerBlock(
         c_a=c_a, c_s=c_s, c_z=c_z, n_heads=n_heads,
-    ).double()
+    )
     _disable_efficient_attn(dtb)
     test_module_shape(dtb, "diffusion_transformer_block", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_method(
@@ -79,7 +79,7 @@ def main(overwrite: bool = True) -> None:
     dt = DiffusionTransformer(
         c_a=c_a, c_s=c_s, c_z=c_z,
         n_blocks=n_blocks, n_heads=n_heads,
-    ).double()
+    )
     _disable_efficient_attn(dt)
     test_module_shape(dt, "diffusion_transformer", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_method(

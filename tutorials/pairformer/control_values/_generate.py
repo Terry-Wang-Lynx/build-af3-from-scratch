@@ -41,7 +41,7 @@ def main(overwrite: bool = True) -> None:
     torch.manual_seed(0)
 
     # ----- OuterProductMean (Algorithm 10) ---------------------------------
-    opm = OuterProductMean(c_m=c_m, c_z=c_z, c_hidden=c_hidden).double()
+    opm = OuterProductMean(c_m=c_m, c_z=c_z, c_hidden=c_hidden)
     test_module_shape(opm, "outer_product_mean", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_method(
         opm, "outer_product_mean",
@@ -57,7 +57,7 @@ def main(overwrite: bool = True) -> None:
         ("triangle_mul_out", TriangleMultiplicationOutgoing),
         ("triangle_mul_in",  TriangleMultiplicationIncoming),
     ]:
-        mod = cls(c_z=c_z, c_hidden=c_hidden).double()
+        mod = cls(c_z=c_z, c_hidden=c_hidden)
         test_module_shape(mod, variant, CONTROL_FOLDER, overwrite_results=overwrite)
         test_module_method(
             mod, variant,
@@ -71,7 +71,7 @@ def main(overwrite: bool = True) -> None:
     # ----- TriangleAttention (starting node) -------------------------------
     tri_att = TriangleAttention(
         c_in=c_z, c_hidden=c_hidden, no_heads=no_heads_pair, starting=True,
-    ).double()
+    )
     test_module_shape(tri_att, "triangle_attention_start", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_method(
         tri_att, "triangle_attention_start",
@@ -83,7 +83,7 @@ def main(overwrite: bool = True) -> None:
     )
 
     # ----- MSAPairWeightedAveraging (Algorithm 10 inside MSAModule) -------
-    mpwa = MSAPairWeightedAveraging(c_m=c_m, c=c_hidden, c_z=c_z, n_heads=no_heads_pair).double()
+    mpwa = MSAPairWeightedAveraging(c_m=c_m, c=c_hidden, c_z=c_z, n_heads=no_heads_pair)
     test_module_shape(mpwa, "msa_pair_weighted_avg", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         mpwa, "msa_pair_weighted_avg",
@@ -104,7 +104,7 @@ def main(overwrite: bool = True) -> None:
         no_heads_pair=no_heads_pair,
         num_intermediate_factor=2,
         dropout=0.0,
-    ).double()
+    )
     # Like the AttentionPairBias test in attention/, route MHA via the
     # dtype-tolerant explicit path.
     # 同 attention 那边，走显式 attention 路径以兼容 double 输入。

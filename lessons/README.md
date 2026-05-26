@@ -1,5 +1,17 @@
 # Lessons · 章节讲解
 
+> ⚠️ **WIP** — 每章的教学正文还没写完，目前这一目录里只有这份说明。
+> 学生在等待 markdown 期间的替代参考: `solutions/<chapter>/*.py` 里每个
+> 被包裹的 `forward` / `__init__` 上方都有详细的中英伪代码 TODO 块，
+> 对算法、动机、形状、公式都写得很细 —— 单靠 notebook + TODO 已经能
+> 完整学完。
+>
+> ⚠️ **WIP** — the per-chapter writeups are not yet published; this
+> directory is currently just the index. Until they land, the
+> step-by-step pseudocode TODOs in `solutions/<chapter>/*.py` (English
+> + 中文, above every wrapped `forward` / `__init__`) are the primary
+> reference and are enough on their own.
+
 每个 markdown 文件对应一个章节，相当于配套"视频脚本"——讲清楚概念、动机、
 和论文 Algorithm 编号的对应。
 

@@ -33,7 +33,7 @@ def main(overwrite: bool = True) -> None:
     torch.manual_seed(0)
 
     # ----- RelativePositionEncoding.forward (the linear at the tail) --------
-    relpe = RelativePositionEncoding(r_max=r_max, s_max=s_max, c_z=c_z).double()
+    relpe = RelativePositionEncoding(r_max=r_max, s_max=s_max, c_z=c_z)
     test_module_shape(relpe, "relative_position_encoding", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         relpe, "relative_position_encoding",
@@ -44,7 +44,7 @@ def main(overwrite: bool = True) -> None:
     )
 
     # ----- FourierEmbedding -------------------------------------------------
-    fe = FourierEmbedding(c=c_noise).double()
+    fe = FourierEmbedding(c=c_noise)
     test_module_shape(fe, "fourier_embedding", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         fe, "fourier_embedding",

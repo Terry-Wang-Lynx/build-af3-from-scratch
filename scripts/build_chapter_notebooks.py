@@ -116,46 +116,67 @@ def build_attention() -> nbformat.NotebookNode:
 
         # --- Linear ---
         section_md(
-            "## 1.1 Linear\n\n"
-            "打开 `attention/linear.py`，把 `Linear._init_params`、`Linear.forward` 和"
-            "`BiasInitLinear.__init__` 三个 TODO 填好。\n\n"
-            "Linear 在 AF3 不同位置初始化方式不同 (`default` / `relu` / `zeros`)，"
-            "Linear.forward 的 precision 路径用于强制 fp32 计算 (坐标投影、噪声水平条件)。"
-            "BiasInitLinear 是为 sigmoid 门设定初始开度的特殊 Linear。"
+            "## 1.1 Linear (默认初始化)\n\n"
+            "打开 `attention/linear.py`，先把 `Linear._init_params` 和 "
+            "`Linear.forward` 这两个 TODO 填好。\n\n"
+            "`Linear._init_params` 让 AF3 不同位置的线性层用不同初始化方式 "
+            "(`default` / `relu` / `zeros`)。`Linear.forward` 的 precision 路径用于"
+            "强制 fp32 计算 (坐标投影、噪声水平条件)。"
         ),
         section_code(
-            "from attention.linear import Linear, LinearNoBias, BiasInitLinear\n"
+            "from attention.linear import Linear\n"
             "from attention.control_values.attention_checks import (\n"
-            "    c_a, c_s, c_z, test_module_shape, test_module_forward,\n"
-            "    test_inputs,\n"
+            "    c_a, c_z, test_module_shape, test_module_forward, test_inputs,\n"
             ")\n\n"
-            "# Linear with default initializer\n"
             "lin = Linear(in_features=c_a, out_features=c_z)\n"
             "test_module_shape(lin, 'linear_default', control_folder)\n"
             "test_module_forward(lin, 'linear_default',\n"
             "                    inputs=(test_inputs['x_a'],),\n"
             "                    output_names='out',\n"
-            "                    control_folder=control_folder)\n\n"
-            "# LinearNoBias\n"
+            "                    control_folder=control_folder)\n"
+            "print('Linear (default init) ✓')"
+        ),
+
+        # --- LinearNoBias ---
+        section_md(
+            "## 1.2 LinearNoBias\n\n"
+            "`LinearNoBias = partial(Linear, bias=False)` —— 没新代码可填，"
+            "你的 `Linear` 写对了它就一起对。这里跑一组测试单独确认。"
+        ),
+        section_code(
+            "from attention.linear import LinearNoBias\n\n"
             "lin_nb = LinearNoBias(in_features=c_a, out_features=c_z)\n"
             "test_module_shape(lin_nb, 'linear_nobias', control_folder)\n"
             "test_module_forward(lin_nb, 'linear_nobias',\n"
             "                    inputs=(test_inputs['x_a'],),\n"
             "                    output_names='out',\n"
-            "                    control_folder=control_folder)\n\n"
-            "# BiasInitLinear with biasinit=-2.0\n"
-            "bil = BiasInitLinear(in_features=c_s, out_features=c_a, bias=True, biasinit=-2.0)\n"
+            "                    control_folder=control_folder)\n"
+            "print('LinearNoBias ✓')"
+        ),
+
+        # --- BiasInitLinear ---
+        section_md(
+            "## 1.3 BiasInitLinear\n\n"
+            "回到 `attention/linear.py`，把 `BiasInitLinear.__init__` 的 TODO 填好。\n\n"
+            "BiasInitLinear 是为 sigmoid 门设定初始开度的特殊 Linear："
+            "起手就输出常数 `biasinit` (例如 `-2.0` 让 sigmoid(-2)≈0.12，门初闭)。"
+        ),
+        section_code(
+            "from attention.linear import BiasInitLinear\n"
+            "from attention.control_values.attention_checks import c_s\n\n"
+            "bil = BiasInitLinear(in_features=c_s, out_features=c_a,\n"
+            "                     bias=True, biasinit=-2.0)\n"
             "test_module_shape(bil, 'bias_init_linear', control_folder)\n"
             "test_module_forward(bil, 'bias_init_linear',\n"
             "                    inputs=(test_inputs['x_s'],),\n"
             "                    output_names='out',\n"
             "                    control_folder=control_folder)\n"
-            "print('Linear ✓')"
+            "print('BiasInitLinear ✓')"
         ),
 
         # --- LayerNorm ---
         section_md(
-            "## 1.2 LayerNorm\n\n"
+            "## 1.4 LayerNorm\n\n"
             "打开 `attention/layer_norm.py`，把 `OpenFoldLayerNorm.__init__` 和"
             "`OpenFoldLayerNorm.forward` 两个 TODO 填好。AdaLN 等需要"
             "`create_scale=False` 或 `create_offset=False`，因此 LN 必须支持可选的 scale/offset。"
@@ -173,7 +194,7 @@ def build_attention() -> nbformat.NotebookNode:
 
         # --- _attention ---
         section_md(
-            "## 1.3 `_attention` (核心点积数学)\n\n"
+            "## 1.5 `_attention` (核心点积数学)\n\n"
             "打开 `attention/mha.py`，把模块顶部的 `_attention(q, k, v, attn_bias, ...)` 函数 TODO 填好。\n\n"
             "这是所有 attention 流派最底层的数学：缩放点积 + softmax + 加权求和。"
             "函数没有可学参数，所以测试直接比较输出张量。"
@@ -194,7 +215,7 @@ def build_attention() -> nbformat.NotebookNode:
 
         # --- Attention (full MHA) ---
         section_md(
-            "## 1.4 Attention (多头注意力模块)\n\n"
+            "## 1.6 Attention (多头注意力模块)\n\n"
             "继续在 `mha.py` 里，依次填:\n"
             "- `Attention.__init__` (5 个线性层 + 可选门控)\n"
             "- `Attention._prep_qkv` (Q/K/V 投影 + 拆头 + 缩放)\n"
@@ -225,7 +246,7 @@ def build_attention() -> nbformat.NotebookNode:
 
         # --- AdaptiveLayerNorm + Transition ---
         section_md(
-            "## 1.5 AdaptiveLayerNorm + Transition\n\n"
+            "## 1.7 AdaptiveLayerNorm + Transition\n\n"
             "打开 `attention/transition.py`，填两个 TODO:\n"
             "- `AdaptiveLayerNorm.__init__` 和 `.forward` (AF3 算法 26，FiLM 风格调制)\n"
             "- `Transition.__init__` 和 `.forward` (AF3 算法 11，SwiGLU FFN)"
@@ -250,7 +271,7 @@ def build_attention() -> nbformat.NotebookNode:
 
         # --- AttentionPairBias ---
         section_md(
-            "## 1.6 AttentionPairBias (AF3 算法 24)\n\n"
+            "## 1.8 AttentionPairBias (AF3 算法 24)\n\n"
             "打开 `attention/attention_pair_bias.py`，把 `__init__`、`local_multihead_attention`、"
             "`standard_multihead_attention`、`forward` 四个 TODO 填好。\n\n"
             "AttentionPairBias 是 AF3 最核心的复合块: AdaLN + 多头 attention + pair bias + adaLN-Zero 输出门。"

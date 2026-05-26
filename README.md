@@ -35,7 +35,7 @@ build-af3-from-scratch/
 |---|---|---|
 | `solutions/` | 完整参考实现 | 写完 tutorials 后对照检查；学习时尽量不要先看。 |
 | `tutorials/` | `prepare_tutorials.py` 从 `solutions/` 自动剥出的填空版：所有被包裹的 `forward` 内容替换成 `pass`，TODO 上方保留详细伪代码 | 学生按 TODO 一步步把空填上。 |
-| `lessons/` | 每章的教学 markdown | 想了解算法 / 数学背景时阅读。 |
+| `lessons/` | 每章的教学 markdown **(WIP，正在补写)** | 想了解算法 / 数学背景时阅读。当前先看 notebook 里的 TODO 伪代码即可。 |
 
 重新生成填空版：
 
@@ -189,7 +189,7 @@ LAYERNORM_TYPE=torch python -m model.inference \
 ### 4. 端到端 demo
 
 ```bash
-jupyter notebook solutions/overview.ipynb
+jupyter notebook solutions/model/overview.ipynb
 ```
 
 notebook 走完一整圈：构建模型 → 加载权重 → 特征化 → 推理 → 写 CIF → 可视化。

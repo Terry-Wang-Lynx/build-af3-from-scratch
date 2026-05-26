@@ -29,7 +29,7 @@ def main(overwrite: bool = True) -> None:
     torch.manual_seed(0)
 
     # ----- DistogramHead (Algorithm 1 line 17) -----------------------------
-    dh = DistogramHead(c_z=c_z, no_bins=no_bins).double()
+    dh = DistogramHead(c_z=c_z, no_bins=no_bins)
     test_module_shape(dh, "distogram_head", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         dh, "distogram_head",
@@ -57,7 +57,7 @@ def main(overwrite: bool = True) -> None:
         max_atoms_per_token=5,
         pairformer_dropout=0.0,
         distance_bin_start=3.25, distance_bin_end=8.25, distance_bin_step=1.25,
-    ).double()
+    )
     test_module_shape(ch, "confidence_head_init", CONTROL_FOLDER, overwrite_results=overwrite)
 
     if overwrite:

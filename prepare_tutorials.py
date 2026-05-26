@@ -94,6 +94,7 @@ FOLDER_COPY_PATHS: list[str] = [
     "feature_embedding/control_values",
     "diffusion/control_values",
     "confidence/control_values",
+    "model/control_values",
 ]
 
 

@@ -49,7 +49,7 @@ def main(overwrite: bool = True) -> None:
     torch.manual_seed(0)
 
     # ----- Linear (initializer="default") ----------------------------------
-    lin = Linear(in_features=c_a, out_features=c_z).double()
+    lin = Linear(in_features=c_a, out_features=c_z)
     test_module_shape(lin, "linear_default", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         lin, "linear_default",
@@ -60,7 +60,7 @@ def main(overwrite: bool = True) -> None:
     )
 
     # ----- LinearNoBias ----------------------------------------------------
-    lin_nb = LinearNoBias(in_features=c_a, out_features=c_z).double()
+    lin_nb = LinearNoBias(in_features=c_a, out_features=c_z)
     test_module_shape(lin_nb, "linear_nobias", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         lin_nb, "linear_nobias",
@@ -71,7 +71,7 @@ def main(overwrite: bool = True) -> None:
     )
 
     # ----- BiasInitLinear (biasinit=-2.0) ----------------------------------
-    bil = BiasInitLinear(in_features=c_s, out_features=c_a, bias=True, biasinit=-2.0).double()
+    bil = BiasInitLinear(in_features=c_s, out_features=c_a, bias=True, biasinit=-2.0)
     test_module_shape(bil, "bias_init_linear", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         bil, "bias_init_linear",
@@ -82,7 +82,7 @@ def main(overwrite: bool = True) -> None:
     )
 
     # ----- LayerNorm (default scale + offset) ------------------------------
-    ln = LayerNorm(c_a).double()
+    ln = LayerNorm(c_a)
     test_module_shape(ln, "layer_norm", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         ln, "layer_norm",
@@ -115,7 +115,7 @@ def main(overwrite: bool = True) -> None:
         gating=True, q_linear_bias=True,
         use_efficient_implementation=False,
         zero_init=False,
-    ).double()
+    )
     test_module_shape(attn, "mha_gated", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_method(
         attn, "mha_gated",
@@ -127,7 +127,7 @@ def main(overwrite: bool = True) -> None:
     )
 
     # ----- AdaptiveLayerNorm ----------------------------------------------
-    adaln = AdaptiveLayerNorm(c_a=c_a, c_s=c_s).double()
+    adaln = AdaptiveLayerNorm(c_a=c_a, c_s=c_s)
     test_module_shape(adaln, "adaptive_layer_norm", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         adaln, "adaptive_layer_norm",
@@ -138,7 +138,7 @@ def main(overwrite: bool = True) -> None:
     )
 
     # ----- Transition ------------------------------------------------------
-    tr = Transition(c_in=c_a, n=n_factor).double()
+    tr = Transition(c_in=c_a, n=n_factor)
     test_module_shape(tr, "transition", CONTROL_FOLDER, overwrite_results=overwrite)
     test_module_forward(
         tr, "transition",
@@ -153,7 +153,7 @@ def main(overwrite: bool = True) -> None:
         has_s=True, create_offset_ln_z=False,
         n_heads=N_head, c_a=c_a, c_s=c_s, c_z=c_z,
         biasinit=-2.0, cross_attention_mode=False,
-    ).double()
+    )
     # F.scaled_dot_product_attention rejects mixed dtypes; the explicit path
     # is dtype-tolerant. We turn the efficient path off only for testing.
     # F.scaled_dot_product_attention 不容忍 dtype 不一致，

@@ -31,10 +31,28 @@ from torch import nn
 # 受控执行
 # ----------------------------------------------------------------------------
 
+def _detect_uninitialised(module: nn.Module, test_name: str) -> None:
+    """Raise a friendly AssertionError when ``module``'s ``__init__`` body
+    was left as ``pass`` (so ``super().__init__()`` never ran and the
+    underlying ``nn.Module`` state was never set up).
+
+    模块的 ``__init__`` 还停留在 ``pass`` 时给出一句人话错误，避免下游
+    抛 PyTorch 内部 AttributeError。
+    """
+    if not hasattr(module, "_parameters") or not hasattr(module, "_modules"):
+        raise AssertionError(
+            f"{test_name}: {type(module).__name__} appears to be "
+            f"uninitialized. This usually means your ``__init__`` body is "
+            f"still ``pass`` so ``super().__init__()`` (and the parameter "
+            f"setup) never ran. Fill in the __init__ TODO first."
+        )
+
+
 def controlled_execution(
     module: nn.Module,
     inp: Iterable[Any],
     method: Callable[..., Any],
+    test_name: str = "<unknown>",
 ) -> Any:
     """Run ``method(*inp)`` with the module's parameters temporarily
     replaced by ``torch.linspace(-1, 1, numel)``. The originals are
@@ -44,15 +62,18 @@ def controlled_execution(
     返回前恢复原参数。
 
     Args / 参数:
-        module:  the module under test / 被测模块.
-        inp:     positional arguments forwarded to ``method`` /
-                 转发给 ``method`` 的位置参数.
-        method:  callable to invoke; usually ``lambda *x: module(*x)`` /
-                 通常传 ``lambda *x: module(*x)``.
+        module:    the module under test / 被测模块.
+        inp:       positional arguments forwarded to ``method`` /
+                   转发给 ``method`` 的位置参数.
+        method:    callable to invoke; usually ``lambda *x: module(*x)`` /
+                   通常传 ``lambda *x: module(*x)``.
+        test_name: test label, used for friendly error messages /
+                   测试标签，仅用于错误信息。
 
     Returns / 返回:
         Whatever ``method`` returned. / ``method`` 的返回值。
     """
+    _detect_uninitialised(module, test_name)
     was_training = module.training
     module.eval()
     module.double()
@@ -68,11 +89,13 @@ def controlled_execution(
     return out
 
 
-def controlled_forward(module: nn.Module, inp: Iterable[Any]) -> Any:
+def controlled_forward(
+    module: nn.Module, inp: Iterable[Any], test_name: str = "<unknown>",
+) -> Any:
     """Convenience wrapper for ``controlled_execution`` with ``module(...)``.
     便捷封装：以 ``module(...)`` 作为方法跑 ``controlled_execution``。
     """
-    return controlled_execution(module, inp, lambda *x: module(*x))
+    return controlled_execution(module, inp, lambda *x: module(*x), test_name=test_name)
 
 
 # ----------------------------------------------------------------------------
@@ -95,18 +118,8 @@ def test_module_shape(
     ``<control_folder>/<test_name>_param_shapes.pt`` 中保存的一致。
     ``overwrite_results=True`` 时重新生成参考文件。
     """
-    try:
-        param_shapes = {name: tuple(p.shape) for name, p in module.named_parameters()}
-    except AttributeError as exc:
-        # nn.Module raises this when ``__init__`` never ran (e.g. the student
-        # left ``__init__``'s body as ``pass`` and ``super().__init__()`` was
-        # never called). Surface a friendlier hint.
-        raise AssertionError(
-            f"{test_name}: {type(module).__name__} appears to be uninitialized "
-            f"({exc}). This usually means your ``__init__`` body is still "
-            f"``pass`` so ``super().__init__()`` (and the parameter setup) "
-            f"never ran. Fill in the __init__ TODO first."
-        ) from None
+    _detect_uninitialised(module, test_name)
+    param_shapes = {name: tuple(p.shape) for name, p in module.named_parameters()}
     shapes_path = os.path.join(control_folder, f"{test_name}_param_shapes.pt")
 
     if overwrite_results:
@@ -174,7 +187,7 @@ def test_module_method(
     inputs = tuple(inputs)
 
     with torch.no_grad():
-        out = controlled_execution(module, inputs, method)
+        out = controlled_execution(module, inputs, method, test_name=test_name)
     out = _as_tuple(out)
 
     if overwrite_results:

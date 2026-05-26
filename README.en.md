@@ -36,7 +36,7 @@ fully-qualified form `from <chapter>.<file> import <Class>`.
 |---|---|---|
 | `solutions/` | Complete reference implementation | Read it after you've done your own pass — try not to peek beforehand. |
 | `tutorials/` | Auto-extracted from `solutions/` by `prepare_tutorials.py`. Every wrapped `forward` body is replaced with `pass`, and the TODO block above it carries detailed pseudocode. | Where you fill in the blanks. |
-| `lessons/` | Per-chapter teaching markdown | For algorithm / math background. |
+| `lessons/` | Per-chapter teaching markdown **(WIP, being written)** | For algorithm / math background. Until each chapter is written up, the inline TODO pseudocode in the notebooks is your reference. |
 
 Regenerate the blanks:
 
@@ -205,7 +205,7 @@ For each sample the runner produces a `*.cif` and a
 ### 4. End-to-end demo
 
 ```bash
-jupyter notebook solutions/overview.ipynb
+jupyter notebook solutions/model/overview.ipynb
 ```
 
 The notebook walks through: build model → load weights → featurize → run

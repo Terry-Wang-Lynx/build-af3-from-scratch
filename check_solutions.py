@@ -93,8 +93,11 @@ def main() -> int:
         help="Per-cell timeout in seconds. 单 cell 超时时间。",
     )
     ap.add_argument(
-        "--keep-going", action="store_true",
-        help="Don't stop at the first failure. 失败后继续跑后续章节。",
+        "--fail-fast", action="store_true",
+        help="Stop at the first failure. Default is to run every notebook "
+             "and summarize at the end (more useful for students wanting the "
+             "full picture). 默认跑完所有 notebook 再汇总；加这个开关在第一次"
+             "失败处即停 (适合 CI)。",
     )
     args = ap.parse_args()
 
@@ -134,7 +137,7 @@ def main() -> int:
         else:
             print(f"FAIL  ({elapsed:.1f}s)\n         {msg}")
             failures.append((rel, msg))
-            if not args.keep_going:
+            if args.fail_fast:
                 break
 
     print()
