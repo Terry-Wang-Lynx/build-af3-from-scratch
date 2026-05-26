@@ -95,7 +95,18 @@ def test_module_shape(
     ``<control_folder>/<test_name>_param_shapes.pt`` 中保存的一致。
     ``overwrite_results=True`` 时重新生成参考文件。
     """
-    param_shapes = {name: tuple(p.shape) for name, p in module.named_parameters()}
+    try:
+        param_shapes = {name: tuple(p.shape) for name, p in module.named_parameters()}
+    except AttributeError as exc:
+        # nn.Module raises this when ``__init__`` never ran (e.g. the student
+        # left ``__init__``'s body as ``pass`` and ``super().__init__()`` was
+        # never called). Surface a friendlier hint.
+        raise AssertionError(
+            f"{test_name}: {type(module).__name__} appears to be uninitialized "
+            f"({exc}). This usually means your ``__init__`` body is still "
+            f"``pass`` so ``super().__init__()`` (and the parameter setup) "
+            f"never ran. Fill in the __init__ TODO first."
+        ) from None
     shapes_path = os.path.join(control_folder, f"{test_name}_param_shapes.pt")
 
     if overwrite_results:

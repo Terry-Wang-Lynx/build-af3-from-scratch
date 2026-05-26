@@ -1,0 +1,244 @@
+"""Build solutions/model/overview.ipynb — the end-to-end demo.
+
+构造端到端 demo notebook ``solutions/model/overview.ipynb``。
+
+The notebook auto-detects whether it is opened under ``solutions/`` or
+``tutorials/`` and uses that tree's code, so a student running it from
+``tutorials/model/overview.ipynb`` is actually exercising their own
+fill-ins.
+
+Notebook 自动识别自己在 ``solutions/`` 还是 ``tutorials/`` 下，使用对应
+树的代码 —— 学生在 ``tutorials/`` 中打开时跑的是自己的实现。
+
+Run from the repository root::
+
+    python scripts/build_overview_notebook.py
+"""
+from __future__ import annotations
+
+import os
+import nbformat
+from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
+
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SOL = os.path.join(HERE, "solutions")
+
+
+def main() -> None:
+    nb = new_notebook()
+    nb.cells = [
+        new_markdown_cell(
+            "# build-af3-from-scratch — Overview · 端到端 demo\n\n"
+            "本 notebook 把所有章节拼起来跑一遍完整的 AlphaFold 3 推理：加载自带的 7r6r "
+            "蛋白、加载 Protenix 官方权重、跑一次前向、输出预测结构 + pLDDT / pTM 分数。\n\n"
+            "End-to-end demo: load the bundled 7r6r protein, load the Protenix "
+            "checkpoint, run inference, write the predicted structure, report "
+            "pLDDT / pTM.\n\n"
+            "**前置**：先把 Protenix tiny 权重放到 `checkpoints/` 下：\n\n"
+            "```bash\n"
+            "mkdir -p checkpoints\n"
+            "curl -L -o checkpoints/protenix_tiny_default_v0.5.0.pt \\\n"
+            "    https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_tiny_default_v0.5.0.pt\n"
+            "```"
+        ),
+
+        new_markdown_cell(
+            "## 0. 基本环境 · Basic setup\n\n"
+            "Notebook 自动定位代码树根 (`solutions/` 或 `tutorials/`)。\n"
+            "学生在 `tutorials/` 中打开时，跑的就是 `tutorials/` 里自己填好的代码。"
+        ),
+        new_code_cell(
+            "import os, sys, time, json\n"
+            "from pathlib import Path\n"
+            "\n"
+            "ROOTS = {'solutions', 'tutorials'}\n"
+            "if os.path.basename(os.getcwd()) not in ROOTS:\n"
+            "    while os.path.basename(os.getcwd()) not in ROOTS and os.getcwd() != '/':\n"
+            "        os.chdir('..')\n"
+            "    if os.path.basename(os.getcwd()) not in ROOTS:\n"
+            "        # Started at the repo root — prefer tutorials/ if present.\n"
+            "        if os.path.isdir('tutorials'):\n"
+            "            os.chdir('tutorials')\n"
+            "        elif os.path.isdir('solutions'):\n"
+            "            os.chdir('solutions')\n"
+            "assert os.path.basename(os.getcwd()) in ROOTS, (\n"
+            "    f'could not locate solutions/ or tutorials/ from {os.getcwd()}')\n"
+            "if os.getcwd() not in sys.path:\n"
+            "    sys.path.insert(0, os.getcwd())\n"
+            "os.environ.setdefault('LAYERNORM_TYPE', 'torch')\n"
+            "\n"
+            "REPO_ROOT = Path(os.getcwd()).parent      # the parent of solutions/ or tutorials/\n"
+            "CKPT_DIR  = REPO_ROOT / 'checkpoints'\n"
+            "EXAMPLE   = Path(os.getcwd()) / 'examples' / 'example.json'\n"
+            "print('tree     =', os.getcwd())\n"
+            "print('ckpt dir =', CKPT_DIR, '(exists:', CKPT_DIR.is_dir(), ')')\n"
+            "print('example  =', EXAMPLE, '(exists:', EXAMPLE.is_file(), ')')"
+        ),
+
+        new_markdown_cell(
+            "## 1. 构建模型 · Build the model\n\n"
+            "`Protenix` (`model/model.py`) 是顶层 `nn.Module`，把 InputFeatureEmbedder、"
+            "Pairformer 主干、Diffusion、ConfidenceHead 拼起来 —— 论文 Algorithm 1。"
+        ),
+        new_code_cell(
+            "import torch\n"
+            "from copy import deepcopy\n"
+            "from configs.parser import parse_configs\n"
+            "from configs.configs_base import configs as base_cfg\n"
+            "from configs.configs_data import data_configs\n"
+            "from configs.configs_inference import inference_configs\n"
+            "from configs.configs_model_type import model_configs\n"
+            "\n"
+            "MODEL_NAME = 'protenix_tiny_default_v0.5.0'\n"
+            "\n"
+            "cfg = {**base_cfg, **{'data': data_configs}, **inference_configs}\n"
+            "cfg.update({\n"
+            "    'project': 'af3', 'run_name': 'overview', 'base_dir': '/tmp/af3',\n"
+            "    'eval_interval': 0, 'log_interval': 0,\n"
+            "    'input_json_path': str(EXAMPLE), 'model_name': MODEL_NAME,\n"
+            "    'triangle_attention': 'torch', 'triangle_multiplicative': 'torch',\n"
+            "    'enable_tf32': False, 'enable_efficient_fusion': False,\n"
+            "})\n"
+            "overrides = deepcopy(model_configs[MODEL_NAME])\n"
+            "def merge(d, s):\n"
+            "    for k, v in s.items():\n"
+            "        if isinstance(v, dict) and isinstance(d.get(k), dict): merge(d[k], v)\n"
+            "        else: d[k] = v\n"
+            "merge(cfg, overrides)\n"
+            "cfg = parse_configs(cfg, arg_str=None, fill_required_with_null=True)\n"
+            "cfg.model.N_cycle = 1            # quick demo: one trunk cycle\n"
+            "cfg.sample_diffusion.N_step   = 5  # 5 diffusion steps\n"
+            "cfg.sample_diffusion.N_sample = 1\n"
+            "\n"
+            "from model.model import Protenix\n"
+            "model = Protenix(cfg).eval()\n"
+            "n_params = sum(p.numel() for p in model.parameters()) / 1e6\n"
+            "print(f'Protenix built — {n_params:.2f} M parameters')"
+        ),
+
+        new_markdown_cell(
+            "## 2. 加载权重 · Load the checkpoint\n\n"
+            "`load_state_dict(strict=False)` 会忽略 non-PLM Tiny 权重里残留的 "
+            "`linear_esm.weight`。`missing=0 unexpected=1` 是预期的。"
+        ),
+        new_code_cell(
+            "# Newer torch refuses to unpickle argparse.Namespace under weights_only=True;\n"
+            "# 新版 torch 不允许未声明的 Namespace 反序列化，这里加白名单。\n"
+            "from argparse import Namespace\n"
+            "if hasattr(torch.serialization, 'add_safe_globals'):\n"
+            "    torch.serialization.add_safe_globals([Namespace])\n"
+            "\n"
+            "ckpt_path = CKPT_DIR / f'{MODEL_NAME}.pt'\n"
+            "assert ckpt_path.is_file(), (\n"
+            "    f'missing checkpoint: {ckpt_path}\\n'\n"
+            "    f'see README quickstart for the download command.')\n"
+            "ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)\n"
+            "state = ckpt['model'] if 'model' in ckpt else ckpt\n"
+            "state = {k.removeprefix('module.'): v for k, v in state.items()}\n"
+            "res = model.load_state_dict(state, strict=False)\n"
+            "print(f'missing={len(res.missing_keys)}  unexpected={len(res.unexpected_keys)}')\n"
+            "print('unexpected:', res.unexpected_keys)"
+        ),
+
+        new_markdown_cell(
+            "## 3. 特征化 · Featurize the input\n\n"
+            "`get_inference_dataloader` 解析 JSON、跑 MSA / 模板 featurizer，"
+            "输出可直接喂给模型的 `input_feature_dict`。"
+        ),
+        new_code_cell(
+            "from feature_extraction.inference.infer_dataloader import get_inference_dataloader\n"
+            "from runtime.torch_utils import to_device\n"
+            "\n"
+            "loader = get_inference_dataloader(configs=cfg)\n"
+            "batch = next(iter(loader))\n"
+            "data, atom_array, err = batch[0]\n"
+            "assert not err, f'featurization failed: {err}'\n"
+            "print(f\"sample: {data['sample_name']}\")\n"
+            "print(f\"  N_token = {int(data['N_token'])}\")\n"
+            "print(f\"  N_atom  = {int(data['N_atom'])}\")\n"
+            "print(f\"  N_msa   = {int(data['N_msa'])}\")"
+        ),
+
+        new_markdown_cell(
+            "## 4. 跑推理 · Run inference\n\n"
+            "一次前向 + 5 步 Euler diffusion 采样。在 M2 Max CPU 上约 10s。"
+        ),
+        new_code_cell(
+            "device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')\n"
+            "print('device:', device)\n"
+            "\n"
+            "model = model.to(device)\n"
+            "data  = to_device(data, device)\n"
+            "\n"
+            "t0 = time.time()\n"
+            "with torch.no_grad():\n"
+            "    pred, _, _ = model(input_feature_dict=data['input_feature_dict'], mode='inference')\n"
+            "print(f'forward time: {time.time() - t0:.2f}s')\n"
+            "\n"
+            "summary = pred['summary_confidence'][0]\n"
+            "print(f\"  pLDDT         = {float(summary['plddt']):.2f}\")\n"
+            "print(f\"  pTM           = {float(summary['ptm']):.3f}\")\n"
+            "print(f\"  ranking score = {float(summary['ranking_score']):.3f}\")\n"
+            "print(f\"  has_clash     = {bool(summary['has_clash'])}\")"
+        ),
+
+        new_markdown_cell(
+            "## 5. 写预测结构 · Write the CIF"
+        ),
+        new_code_cell(
+            "from feature_extraction.utils import save_structure_cif\n"
+            "\n"
+            "out_dir = REPO_ROOT / 'out_demo'\n"
+            "out_dir.mkdir(exist_ok=True)\n"
+            "cif_path = out_dir / '7r6r_pred.cif'\n"
+            "\n"
+            "entity_poly_type = {\n"
+            "    k: v for k, v in data['entity_poly_type'].items() if v != 'non-polymer'\n"
+            "}\n"
+            "save_structure_cif(\n"
+            "    atom_array=atom_array,\n"
+            "    pred_coordinate=pred['coordinate'][0],\n"
+            "    output_fpath=str(cif_path),\n"
+            "    entity_poly_type=entity_poly_type,\n"
+            "    pdb_id='7r6r_pred',\n"
+            ")\n"
+            "print('wrote:', cif_path, f'({cif_path.stat().st_size // 1024} KB)')"
+        ),
+
+        new_markdown_cell(
+            "## 6. 可视化 · Visualize\n\n"
+            "装了 `py3Dmol` 就能直接在 notebook 里渲染；否则用 ChimeraX / PyMOL 打开 `.cif`。"
+        ),
+        new_code_cell(
+            "try:\n"
+            "    import py3Dmol\n"
+            "    view = py3Dmol.view(width=600, height=400)\n"
+            "    with open(cif_path) as f:\n"
+            "        view.addModel(f.read(), 'mmcif')\n"
+            "    view.setStyle({'cartoon': {'color': 'spectrum'}})\n"
+            "    view.zoomTo()\n"
+            "    view.show()\n"
+            "except ImportError:\n"
+            "    print('py3Dmol not installed; skip in-notebook view.')\n"
+            "    print('Open', cif_path, 'in ChimeraX / PyMOL.')"
+        ),
+
+        new_markdown_cell(
+            "## 接下来 · What next\n\n"
+            "- `solutions/<chapter>/<chapter>.ipynb` 把每章再走一遍，看每个空对应论文哪条算法。\n"
+            "- `python check_solutions.py` 一次跑完所有章节 (默认不含 overview)。\n"
+            "- `python generate_control_values.py --verify --src tutorials` 验证学生填空版。\n"
+            "\n"
+            "If you opened this from `tutorials/`, the inference above just ran on\n"
+            "**your** implementation — congratulations on building AF3 from scratch."
+        ),
+    ]
+    out = os.path.join(SOL, "model", "overview.ipynb")
+    with open(out, "w") as f:
+        nbformat.write(nb, f)
+    print(f"  wrote {out}  ({len(nb.cells)} cells)")
+
+
+if __name__ == "__main__":
+    main()
