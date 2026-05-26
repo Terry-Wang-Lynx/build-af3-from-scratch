@@ -32,13 +32,22 @@ from torch import nn
 # ----------------------------------------------------------------------------
 
 def _detect_uninitialised(module: nn.Module, test_name: str) -> None:
-    """Raise a friendly AssertionError when ``module``'s ``__init__`` body
-    was left as ``pass`` (so ``super().__init__()`` never ran and the
-    underlying ``nn.Module`` state was never set up).
+    """Raise a friendly AssertionError when ``module`` (or any of its
+    children) has an ``__init__`` body still left as ``pass`` so
+    ``super().__init__()`` was never called and the ``nn.Module`` state
+    (``_parameters`` / ``_modules``) was never set up.
 
-    模块的 ``__init__`` 还停留在 ``pass`` 时给出一句人话错误，避免下游
-    抛 PyTorch 内部 AttributeError。
+    模块或它的任一子模块的 ``__init__`` 还停留在 ``pass`` 时给出一句
+    人话错误，避免下游抛 PyTorch 内部 AttributeError。
+
+    The walk is iterative (avoid recursion limits on big trees) and uses
+    ``_modules`` directly because ``named_modules()`` itself can blow up
+    on a half-initialized child.
+    迭代式遍历 (避免大模型递归过深)，直接读 ``_modules``，因为
+    ``named_modules()`` 本身就可能在半初始化子模块上崩。
     """
+    # Outer module first — quickest path when the student's own __init__
+    # is the offender.
     if not hasattr(module, "_parameters") or not hasattr(module, "_modules"):
         raise AssertionError(
             f"{test_name}: {type(module).__name__} appears to be "
@@ -46,6 +55,33 @@ def _detect_uninitialised(module: nn.Module, test_name: str) -> None:
             f"still ``pass`` so ``super().__init__()`` (and the parameter "
             f"setup) never ran. Fill in the __init__ TODO first."
         )
+
+    # Walk children iteratively. A half-initialized child surfaces as
+    # missing ``_modules`` / ``_parameters`` even though the parent looks
+    # fine.
+    seen: set[int] = set()
+    stack: list[tuple[str, nn.Module]] = [
+        (name, child)
+        for name, child in module._modules.items()
+        if child is not None
+    ]
+    while stack:
+        path, child = stack.pop()
+        if id(child) in seen:
+            continue
+        seen.add(id(child))
+        if not hasattr(child, "_parameters") or not hasattr(child, "_modules"):
+            raise AssertionError(
+                f"{test_name}: child module {path!r} "
+                f"({type(child).__name__}) appears to be uninitialized. "
+                f"This usually means one of the per-chapter ``__init__`` "
+                f"bodies is still ``pass`` so ``super().__init__()`` (and "
+                f"the parameter setup) never ran. Fill in the per-chapter "
+                f"__init__ TODOs first."
+            )
+        for sub_name, sub_child in child._modules.items():
+            if sub_child is not None:
+                stack.append((f"{path}.{sub_name}", sub_child))
 
 
 def controlled_execution(

@@ -81,10 +81,8 @@ class DistogramHead(nn.Module):
         #       return logits                                                    #
         ##########################################################################
 
-        # [*, N, N, no_bins]
-        logits = self.linear(z)
-        logits = logits + logits.transpose(-2, -3)
-        return logits
+        # Replace "pass" statement with your code
+        pass
 
         ##########################################################################
         #               END OF YOUR CODE                                         #

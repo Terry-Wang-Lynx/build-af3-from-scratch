@@ -8,9 +8,12 @@ Usage / 用法::
     python check_solutions.py --src tutorials  # check the student tree
     python check_solutions.py --chapters attention pairformer
 
-Fails fast — stops at the first broken notebook so you can investigate.
+By default runs every chapter and reports a summary at the end (useful
+for students who want the full picture of what they still have to fill
+in). Add ``--fail-fast`` to stop at the first failure (useful for CI).
 
-第一个失败就停下来，便于排查。
+默认跑完所有章节再汇总 (适合学生看自己还差哪些)；加 ``--fail-fast`` 改为
+第一个失败就停 (适合 CI)。
 
 This is the AF3 educational project's analogue of the AF2 reference's
 ``check_solutions.py``.

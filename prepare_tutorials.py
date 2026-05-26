@@ -200,18 +200,34 @@ def main() -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
-    # 4. whole folders
-    _ignore = shutil.ignore_patterns(
-        "__pycache__", "*.py[cod]", ".DS_Store", ".ipynb_checkpoints",
-    )
+    # 4. whole folders. Skip:
+    #    - junk (__pycache__, ipynb_checkpoints, etc.)
+    #    - any file already processed by step 1 (PYTHON_PATHS) — otherwise
+    #      copytree would clobber the stubbed version with the solution.
+    # 拷整个目录。要跳过:
+    #   - 临时垃圾文件
+    #   - step 1 已经处理过的 .py (PYTHON_PATHS) —— 否则会被原版覆盖。
+    _junk_patterns = ("__pycache__", "*.py[cod]", ".DS_Store", ".ipynb_checkpoints")
+    _already_stubbed = {str(SOL / p) for p in PYTHON_PATHS}
+
+    def _ignore(directory: str, names: list[str]) -> set[str]:
+        ignored = set(shutil.ignore_patterns(*_junk_patterns)(directory, names))
+        for name in names:
+            full = os.path.join(directory, name)
+            if full in _already_stubbed:
+                ignored.add(name)
+        return ignored
+
     for rel in FOLDER_COPY_PATHS:
         src = SOL / rel
         if not src.is_dir():
             continue
         dst = TUT / rel
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.copytree(src, dst, ignore=_ignore)
+        # Don't rmtree — step 1 may have already populated dst with stubbed
+        # files. Just merge over the top.
+        # 不再 rmtree —— step 1 可能已经把 stub 写进 dst 了，
+        # 这里仅在 stub 之上补齐。
+        shutil.copytree(src, dst, ignore=_ignore, dirs_exist_ok=True)
 
     # 5. per-chapter __init__.py.
     #    Copy verbatim from solutions/ (preserves module-level docstrings),
