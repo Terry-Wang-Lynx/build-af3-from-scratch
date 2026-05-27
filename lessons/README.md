@@ -1,27 +1,31 @@
 # Lessons · 章节讲解
 
-> ⚠️ **WIP** — 每章的教学正文还没写完，目前这一目录里只有这份说明。
-> 学生在等待 markdown 期间的替代参考: `solutions/<chapter>/*.py` 里每个
-> 被包裹的 `forward` / `__init__` 上方都有详细的中英伪代码 TODO 块，
-> 对算法、动机、形状、公式都写得很细 —— 单靠 notebook + TODO 已经能
-> 完整学完。
->
-> ⚠️ **WIP** — the per-chapter writeups are not yet published; this
-> directory is currently just the index. Until they land, the
-> step-by-step pseudocode TODOs in `solutions/<chapter>/*.py` (English
-> + 中文, above every wrapped `forward` / `__init__`) are the primary
-> reference and are enough on their own.
+每个 markdown 文件对应一个章节，是配套 `tutorials/<chapter>/<chapter>.ipynb`
+的「讲解正文」。讲清楚 AF3 的概念动机、数学公式、论文 Algorithm 编号、
+以及它们如何对应到本仓库 `solutions/<chapter>/` 下的具体代码。
 
-每个 markdown 文件对应一个章节，相当于配套"视频脚本"——讲清楚概念、动机、
-和论文 Algorithm 编号的对应。
+Each markdown corresponds to one chapter — the "lesson text" companion
+to `tutorials/<chapter>/<chapter>.ipynb`. Walks through concept,
+motivation, equations, paper Algorithm numbers, and how each maps to
+our `solutions/<chapter>/` code.
 
-Each markdown corresponds to one chapter — a "lesson script" that walks
-through the concept, the motivation, and the mapping to the AF3 paper's
-Algorithm numbers.
+## 灵感来源 · Inspiration
+
+本系列在结构和切分上深度参考了
+**[The Illustrated AlphaFold](https://elanapearl.github.io/blog/2024/the-illustrated-alphafold/)**
+(Elana Pearl Simon, Stanford, 2024) —— 一份业内公认的 AF3 可视化讲解。
+我们这套中文 lessons 是**原创内容**：保留她的章节切分和概念顺序，但
+所有正文用我们自己的话重写，并把每一节绑到本仓库 `solutions/` 下的
+具体类与函数；示意图请直接参考论文 (Abramson et al. 2024) Figure /
+Supplementary Algorithm 编号。
+
+This series is deeply inspired by **The Illustrated AlphaFold** in its
+sectioning and concept ordering, but the prose is all original and tied
+to this repo's code. For figures, refer directly to the AF3 paper
+(Abramson et al. 2024).
 
 ## 章节顺序 · Chapter order
 
-Same order as the main README's "学习路径" table — keep these in sync.
 顺序与主 README "学习路径" 表保持一致。
 
 | #  | 章节 · Chapter | 内容 · What it covers | AF3 Alg. |
@@ -36,33 +40,26 @@ Same order as the main README's "学习路径" table — keep these in sync.
 
 ## 怎么读 · How to use
 
-每个 markdown 写完后，对应章节下的 `tutorials/<chapter>/<chapter>.ipynb`
-里就有一个 *narrative* 部分（从 markdown 抽出来的解释）+ 几个 *exercise*
-代码 cell（带 TODO）。学生顺着 notebook 实现这一章的核心类，跑测试，
-然后进入下一章。
+打开一个 lesson md → 边读边按它的章节顺序打开
+`tutorials/<chapter>/<chapter>.ipynb` 的对应小节 → 在 `tutorials/<chapter>/*.py`
+里填好 TODO → 跑 notebook 测试 cell 验证 → 跑章末 `generate_control_values.py
+--verify --src tutorials --chapters <chapter>` 兜底。
 
-After each lesson is written, the corresponding
-`tutorials/<chapter>/<chapter>.ipynb` notebook contains a narrative
-(extracted from the markdown) plus exercise code cells with `TODO`
-blocks. Students implement the chapter's core classes, verify against
-`control_values/`, then move on.
+## 参考资源 · References
 
-如果某一章的 markdown 还没写，可以直接看
-`solutions/<chapter>/` 里的代码——文件名和类名都按论文的 Algorithm
-来命名，搭配 AF3 论文 Supplementary 看就够了。
-
-If a chapter's markdown isn't written yet, just read
-`solutions/<chapter>/` directly — files and classes are named after the
-paper's Algorithm numbers, so the AF3 SI is enough to follow along.
+- **AF3 主论文**: Abramson, J. *et al.* "Accurate structure prediction of biomolecular interactions with AlphaFold 3." *Nature* (2024). [DOI: 10.1038/s41586-024-07487-w](https://www.nature.com/articles/s41586-024-07487-w)
+- **AF3 Supplementary**: 含所有 Algorithm 伪代码 (1 ~ 31)；建议下载放在手边对照看
+- **The Illustrated AlphaFold**: https://elanapearl.github.io/blog/2024/the-illustrated-alphafold/ —— 可视化讲解，本系列灵感来源
+- **ByteDance Protenix**: https://github.com/bytedance/Protenix —— AF3 的开源复现，我们 `solutions/` 的代码与之兼容、权重可直接加载
 
 ## 状态 · Status
 
 | 章节 | 状态 |
 |------|------|
-| feature_extraction | TBD |
-| attention | TBD |
-| pairformer | TBD |
-| feature_embedding | TBD |
-| diffusion | TBD |
-| confidence | TBD |
-| model | TBD |
+| feature_extraction | ✅ |
+| attention | ✅ |
+| pairformer | ✅ |
+| feature_embedding | ✅ |
+| diffusion | ✅ |
+| confidence | ✅ |
+| model | ✅ |
