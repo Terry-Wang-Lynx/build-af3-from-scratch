@@ -280,4 +280,8 @@ faster.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Released under Apache 2.0 — see [LICENSE](LICENSE) (full Apache 2.0 text
+included). Copyright notices and full license terms for third-party components
+(ByteDance Protenix, AlQuraishi/OpenFold-derived utilities, and the
+MIT-licensed `alphafold-decoded` teaching scaffold) are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

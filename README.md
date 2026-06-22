@@ -257,4 +257,7 @@ notebook 走完一整圈：构建模型 → 加载权重 → 特征化 → 推�
 
 ## License
 
-Apache 2.0，见 [LICENSE](LICENSE)。
+本仓库以 Apache 2.0 发布，见 [LICENSE](LICENSE)（含完整 Apache 2.0 全文）。
+第三方组件（ByteDance Protenix、AlQuraishi/OpenFold 衍生工具、MIT 许可的
+`alphafold-decoded` 教学脚手架）的版权声明与许可全文见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -386,3 +386,113 @@ checkpoints; the disabled ESM projection key in tiny/default checkpoints is
 safely ignored." Verified `grep -n '完全兼容\|fully compatible\|bit-for-bit'
 README.md README.en.md` returns no matches — no overstated compatibility claim
 remains in either README.
+
+### 8. License and third-party attribution files are incomplete for public release
+
+Priority: high
+
+Status: resolved
+
+Audit surface: open-source readiness / license and attribution clarity.
+
+Evidence:
+
+```bash
+rg --files -g 'LICENSE*' -g 'NOTICE*' -g 'CITATION*'
+# LICENSE
+
+find . -maxdepth 3 -iname '*license*' -o -iname '*notice*' -o -iname '*copying*'
+# ./LICENSE
+
+sed -n '1,220p' LICENSE
+```
+
+Observed detail:
+
+- Root `LICENSE` is a short custom summary plus a partial Apache 2.0 excerpt,
+  not a full copy of the Apache License 2.0 text.
+- `LICENSE` says the pedagogical structure is adapted from
+  `alphafold-decoded` under MIT, but the repo does not include the full MIT
+  license text / copyright notice for that upstream.
+- Many copied or adapted implementation files retain ByteDance Apache 2.0
+  headers, and some files also retain `Copyright 2021 AlQuraishi Laboratory`
+  headers, but there is no `NOTICE` / `THIRD_PARTY_NOTICES` file summarizing
+  these upstream components and their licenses.
+
+Relevant files:
+
+- `LICENSE`
+- `README.md`
+- `README.en.md`
+- files under `solutions/` and `tutorials/` with existing upstream copyright
+  headers
+
+Why this matters:
+
+For an open-source release, downstream users should be able to see the full
+license terms and preserved third-party notices without following external
+links or inferring provenance from scattered file headers. The current state is
+easy to misunderstand as "everything is newly Apache-2.0 under this repo",
+while parts are derived from Protenix, OpenFold/AlQuraishi-style utilities, and
+an MIT-licensed teaching scaffold.
+
+Suggested fix direction:
+
+- Replace or extend root `LICENSE` with the complete Apache License 2.0 text
+  for this repository's primary license.
+- Add `NOTICE` or `THIRD_PARTY_NOTICES.md` listing at least:
+  - ByteDance Protenix, Apache 2.0, with copyright notice and source URL.
+  - `alphafold-decoded` by Kilian Mandon, MIT, with copyright notice and
+    source URL.
+  - AlQuraishi Laboratory / OpenFold-derived files where those copyright
+    headers remain, with their applicable license and source URL.
+- Include the full MIT license text for the `alphafold-decoded` attribution,
+  either inside `THIRD_PARTY_NOTICES.md` or as a separate license appendix.
+- Keep README acknowledgements, but do not rely on README alone for license
+  compliance.
+
+After fixing, run:
+
+```bash
+rg --files -g 'LICENSE*' -g 'NOTICE*' -g 'THIRD_PARTY*' -g 'CITATION*'
+rg -n "MIT License|Apache License, Version 2.0|ByteDance|Kilian|AlQuraishi|OpenFold" LICENSE* NOTICE* THIRD_PARTY* README.md README.en.md
+```
+
+**Resolution (2026-06-22, fix agent)**: Brought the repo to open-source-ready
+license/attribution state.
+
+1. `LICENSE` rewritten (28 → 227 lines): kept a concise provenance summary at
+   the top, then included the **complete, verbatim Apache License 2.0 text**
+   (the previous file only carried the short per-file boilerplate excerpt).
+   Added an explicit repository copyright line
+   (`Copyright 2024-2026 Terry Wang (Terry-Wang-Lynx) and contributors.`).
+
+2. Added `THIRD_PARTY_NOTICES.md` listing every incorporated upstream with
+   copyright notice, source URL, and license:
+   - ByteDance Protenix — Apache 2.0 (67 source files carry its header).
+   - AlQuraishi Laboratory / OpenFold-derived utilities — Apache 2.0, with the
+     authoritative file list (`template_parser.py`, `pairformer/triangle_ops.py`,
+     `pairformer/triangle.py`, mirrored in `tutorials/`).
+   - `alphafold-decoded` by Kilian Mandon — **full MIT License text reproduced
+     inline**, since MIT requires the copyright + permission notice to travel
+     with the work.
+   - A "reference materials (not redistributed)" section clarifying that the
+     AF3 Nature paper and "The Illustrated AlphaFold" are referenced, not
+     reproduced (no embedded figures).
+
+3. Linked `THIRD_PARTY_NOTICES.md` from the `## License` section of both
+   `README.md` and `README.en.md` so license compliance no longer relies on
+   the README acknowledgements alone.
+
+Did not modify the per-file Apache headers in `solutions/` / `tutorials/` —
+they are correct and now summarized centrally in `THIRD_PARTY_NOTICES.md`.
+
+Verification:
+
+```text
+ls LICENSE THIRD_PARTY_NOTICES.md                 → both present
+grep -c "END OF TERMS AND CONDITIONS" LICENSE     → 1 (full Apache text)
+grep -c "WITHOUT WARRANTY OF ANY KIND" THIRD_PARTY_NOTICES.md → 1 (full MIT text)
+grep -l "MIT License|Apache License, Version 2.0|ByteDance|Kilian|AlQuraishi|OpenFold" \
+     LICENSE THIRD_PARTY_NOTICES.md README.md README.en.md → all four match
+```
