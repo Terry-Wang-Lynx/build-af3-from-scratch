@@ -632,3 +632,95 @@ python -c "import optree, requests, packaging, typing_extensions; \
            print(utils._fetch_dims({'x': torch.zeros(2,3)}))"   (sys.path=solutions)
   → dependency smoke passed; _fetch_dims = [torch.Size([2, 3])]
 ```
+
+### 10. Notebook checker fails with a raw traceback when notebook deps are absent
+
+Priority: low
+
+Status: resolved
+
+Audit surface: notebook execution workflow / validation ergonomics.
+
+Evidence:
+
+```bash
+./venv_protenix/bin/python check_solutions.py --src solutions --chapters feature_extraction --timeout 120 --fail-fast
+./venv_protenix/bin/python check_solutions.py --src solutions --chapters attention --timeout 120 --fail-fast
+```
+
+Current result in the local maintainer venv:
+
+```text
+Traceback (most recent call last):
+  File ".../check_solutions.py", line 32, in <module>
+    from nbconvert.preprocessors import ExecutePreprocessor
+ModuleNotFoundError: No module named 'nbconvert'
+```
+
+Dependency check:
+
+```bash
+./venv_protenix/bin/python -m pip show nbformat nbconvert ipykernel
+# nbformat is installed
+# nbconvert and ipykernel are not installed
+```
+
+Observed detail:
+
+- `README.md`, `README.en.md`, `environment_cpu.yml`, and
+  `environment_mac.yml` now document `nbformat`, `nbconvert`, and `ipykernel`,
+  so a fresh install following current docs should be fine.
+- However, `check_solutions.py` imports `nbformat` and `ExecutePreprocessor`
+  at module import time. If notebook dependencies are missing or a maintainer
+  uses a stale local environment, the script exits with a raw Python traceback
+  before it can print its own bilingual usage/helpful context.
+- This also blocked the 2026-06-22 14:41 notebook smoke audit from reaching
+  actual notebook execution.
+
+Relevant file:
+
+- `check_solutions.py`
+
+Suggested fix direction:
+
+- Wrap the `nbformat` / `nbconvert` imports in a small dependency check that
+  exits with a concise actionable message, for example:
+  `Missing notebook checker dependencies. Install with: pip install nbformat nbconvert ipykernel`
+- Keep the existing README/environment dependency declarations; they are
+  already aligned after issue #5 and #9.
+- Optionally add an early kernel availability check for `python3`, since
+  `ExecutePreprocessor(kernel_name="python3")` depends on an installed kernel.
+
+After fixing or updating the local venv, run:
+
+```bash
+./venv_protenix/bin/python check_solutions.py --src solutions --chapters feature_extraction --timeout 120 --fail-fast
+./venv_protenix/bin/python check_solutions.py --src solutions --chapters attention --timeout 120 --fail-fast
+```
+
+**Resolution (2026-06-22, fix agent)**: Wrapped the module-level `nbformat` /
+`nbconvert` imports in `check_solutions.py` in a `try/except
+ModuleNotFoundError` that calls `sys.exit(...)` with a concise bilingual,
+actionable message naming the missing module and the exact install command
+(`pip install nbformat nbconvert ipykernel`), and noting they are also in the
+conda env files. The script no longer leaks a raw traceback before it can
+explain itself. Did not add the optional standalone python3-kernel
+availability probe — the install hint already lists `ipykernel`, and adding a
+separate kernel check would duplicate the error `ExecutePreprocessor` already
+raises with a clear `NoSuchKernel` / `jupyter_client` message; can revisit if a
+kernel-missing report turns out to be confusing in practice.
+
+Verification:
+
+```text
+# dep-missing path (simulated by blocking the nbconvert import):
+→ prints "check_solutions.py: missing notebook checker dependency 'nbconvert'.
+   Install ... pip install nbformat nbconvert ipykernel ..." and exits cleanly
+   (no traceback).
+
+# happy path (deps present):
+python check_solutions.py --src solutions --chapters feature_extraction \
+    --timeout 150 --fail-fast
+→ running feature_extraction/feature_extraction.ipynb … PASS (19.5s)
+→ all 1 notebook(s) passed
+```

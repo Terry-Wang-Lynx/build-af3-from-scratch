@@ -28,8 +28,24 @@ import sys
 import time
 from pathlib import Path
 
-import nbformat
-from nbconvert.preprocessors import ExecutePreprocessor
+# Notebook execution deps are optional at the system level (they ship in the
+# conda env files and the README pip block, but a stale/minimal venv may lack
+# them). Import them with a concise, actionable message instead of letting a
+# raw ModuleNotFoundError traceback escape before we can explain ourselves.
+# notebook 执行依赖是可选的系统级依赖（conda env / README pip 都已声明，但
+# 老旧或精简的 venv 里可能没装）。这里给出简明可操作的提示，避免直接抛
+# ModuleNotFoundError 让用户看不懂。
+try:
+    import nbformat
+    from nbconvert.preprocessors import ExecutePreprocessor
+except ModuleNotFoundError as exc:  # pragma: no cover - environment guard
+    sys.exit(
+        f"check_solutions.py: missing notebook checker dependency '{exc.name}'.\n"
+        "Install the notebook toolchain, then re-run:\n"
+        "    pip install nbformat nbconvert ipykernel\n"
+        "(these are also in environment_cpu.yml / environment_mac.yml.)\n"
+        "缺少 notebook 检查依赖。请先安装上面的包再重试。"
+    )
 
 
 # Ordered the same way as the README's "学习路径" table.
