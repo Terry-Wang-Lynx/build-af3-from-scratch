@@ -246,7 +246,8 @@ notebook 走完一整圈：构建模型 → 加载权重 → 特征化 → 推�
 - 开箱即用加载字节跳动 Protenix Tiny / Mini 官方权重。
 - 公开 API 全部带中英双语 docstring。
 - 每个被包裹的 `forward` / 关键 `__init__` 上方都写有详细伪代码 TODO，
-  学生照着填出来的就是与 Protenix 权重完全兼容的实现。
+  学生照着填出来的实现可加载 Protenix 权重；tiny / default checkpoint 中
+  未启用的 ESM 投影键会被安全忽略。
 
 ## 致谢
 

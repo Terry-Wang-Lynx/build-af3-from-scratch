@@ -268,7 +268,8 @@ faster.
 - Bilingual (English + 中文) docstrings on the public API.
 - Every wrapped `forward` / key `__init__` ships with a detailed-pseudocode
   TODO so filling in the blanks reduces to mechanical transcription — and
-  the result is bit-for-bit compatible with the Protenix checkpoint.
+  the result loads the Protenix checkpoints; the disabled ESM projection key
+  in tiny/default checkpoints is safely ignored.
 
 ## Acknowledgements
 

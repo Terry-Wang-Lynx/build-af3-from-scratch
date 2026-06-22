@@ -261,7 +261,7 @@ regression.
 
 Priority: high
 
-Status: open
+Status: resolved
 
 Reviewer re-ran the checks after commit `3672059`:
 
@@ -339,3 +339,50 @@ LAYERNORM_TYPE=torch python generate_control_values.py --verify --src solutions 
 LAYERNORM_TYPE=torch python generate_control_values.py --verify --src solutions
 → All 6 chapters passed (model preset reports 109.50 M params).
 ```
+
+### 7. README feature bullets still overstate checkpoint compatibility
+
+Priority: medium
+
+Status: open
+
+Issue 3 softened the workflow section wording from "state_dict 完全兼容" /
+"fully compatible" to "基本兼容 / largely compatible" because tiny/default
+checkpoints include one safely ignored disabled-module key:
+`input_embedder.linear_esm.weight`.
+
+However, the feature bullets near the bottom of both READMEs still make a
+stronger claim:
+
+```text
+README.md:249
+学生照着填出来的就是与 Protenix 权重完全兼容的实现。
+
+README.en.md:271
+the result is bit-for-bit compatible with the Protenix checkpoint.
+```
+
+Relevant files:
+
+- `README.md`
+- `README.en.md`
+
+Fix direction:
+
+- Align these feature bullets with the softened wording used earlier in the
+  README.
+- Suggested Chinese wording: "学生照着填出来的实现可加载 Protenix 权重；tiny /
+  default checkpoint 中未启用的 ESM 投影键会被安全忽略。"
+- Suggested English wording: "the result loads the Protenix checkpoints; the
+  disabled ESM projection key in tiny/default checkpoints is safely ignored."
+- After fixing, search both READMEs for `完全兼容`, `fully compatible`, and
+  `bit-for-bit compatible`.
+
+**Resolution (2026-06-22, fix agent)**: Aligned the feature bullets with the
+softened wording from issue #3. `README.md:249` now reads "学生照着填出来的实现
+可加载 Protenix 权重；tiny / default checkpoint 中未启用的 ESM 投影键会被安全
+忽略。"; `README.en.md:271` now reads "the result loads the Protenix
+checkpoints; the disabled ESM projection key in tiny/default checkpoints is
+safely ignored." Verified `grep -n '完全兼容\|fully compatible\|bit-for-bit'
+README.md README.en.md` returns no matches — no overstated compatibility claim
+remains in either README.
