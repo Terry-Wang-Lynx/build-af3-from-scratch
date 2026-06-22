@@ -66,7 +66,7 @@ def centre_random_augmentation(
     #               input=x_input_coords, dim=-2, keepdim=True)              #
     #       else:                                                            #
     #           center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(     #
-    #               dim=-2) / (mask.sum(dim=-1) + eps)                       #
+    #               dim=-2) / (mask.sum(dim=-1, keepdim=True) + eps)         #
     #           x_input_coords = x_input_coords - center.unsqueeze(dim=-2)   #
     #                                                                        #
     #   Step 3 — Make ``N_sample`` copies by inserting a length-N_sample     #
@@ -123,7 +123,7 @@ def centre_random_augmentation(
     #               input=x_input_coords, dim=-2, keepdim=True)              #
     #       else:                                                            #
     #           center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(     #
-    #               dim=-2) / (mask.sum(dim=-1) + eps)                       #
+    #               dim=-2) / (mask.sum(dim=-1, keepdim=True) + eps)         #
     #           x_input_coords = x_input_coords - center.unsqueeze(dim=-2)   #
     #                                                                        #
     #   步骤 3 — 在 -3 位置插入 N_sample 维复制 N_sample 份:                    #
@@ -172,8 +172,11 @@ def centre_random_augmentation(
             input=x_input_coords, dim=-2, keepdim=True
         )
     else:
+        # ``keepdim=True`` on the denominator preserves the coordinate axis so
+        # ``[..., 3] / [..., 1]`` broadcasts; without it, batched inputs like
+        # ``[B, N_atom, 3]`` raise a broadcast error ([B,3] / [B]).
         center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
-            mask.sum(dim=-1) + eps
+            mask.sum(dim=-1, keepdim=True) + eps
         )
         x_input_coords = x_input_coords - center.unsqueeze(dim=-2)
 

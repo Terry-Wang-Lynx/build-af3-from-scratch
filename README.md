@@ -2,9 +2,21 @@
 
 [English version](README.en.md)
 
-一个面向教学、对 Mac 友好的 **AlphaFold 3** 复现项目。按章节拆分的 Python 包结构，
-可直接加载字节跳动 **Protenix** 官方 checkpoint，CPU / Apple Silicon MPS / CUDA
-都能跑。
+一个面向教学、对 Mac 友好的 **AlphaFold 3 / Protenix 教学拆解项目**。按章节拆分的
+Python 包结构，可加载字节跳动 **Protenix** 官方 checkpoint（tiny / default 权重里
+未启用的 ESM 投影键会被安全忽略），CPU / Apple Silicon MPS / CUDA 都能跑。
+
+## 范围与非目标（Scope / Non-goals）
+
+这是一个**教学引导式实现**，目的是把 AF3 的核心概念讲清楚、让你能亲手把每个模块
+填出来——**不是**一个完整、独立的 AF3 科研级复现。请按这个定位来理解本仓库：
+
+- **已验证路径**：仅推理（inference-only），用 Protenix Tiny / default checkpoint
+  跑随仓库附带的**纯蛋白** `7r6r` 样例。
+- **概念性讲解（未在本仓库端到端验证）**：训练 / loss、完整 AF3 数据管线校验，以及
+  配体 / RNA / DNA / 模板 / 实验约束等更广的生物分子覆盖。代码里能看到这些通路的
+  上游实现，但本仓库**没有**附带对应的样例与测试，请当作「上游代码导览 + 概念讲解」，
+  在补充样例和测试之前不要当成已验证能力。
 
 ## 项目结构
 
@@ -14,7 +26,7 @@
 build-af3-from-scratch/
 ├── lessons/      # 章节讲解（markdown）
 ├── tutorials/    # 学生填空版（自动生成）
-└── solutions/    # 完整参考实现
+└── solutions/    # 教学参考答案（练习的参考实现）
     ├── attention/                # MHA + LayerNorm + AttentionPairBias
     ├── feature_extraction/       # JSON / MSA / template → 张量
     ├── feature_embedding/        # 输入嵌入 + Atom Attention Encoder
@@ -33,7 +45,7 @@ build-af3-from-scratch/
 
 | 目录 | 内容 | 用法 |
 |---|---|---|
-| `solutions/` | 完整参考实现 | 写完 tutorials 后对照检查；学习时尽量不要先看。 |
+| `solutions/` | 教学参考答案（练习的参考实现）| 写完 tutorials 后对照检查；学习时尽量不要先看。 |
 | `tutorials/` | `prepare_tutorials.py` 从 `solutions/` 自动剥出的填空版：所有被包裹的 `forward` 内容替换成 `pass`，TODO 上方保留详细伪代码 | 学生按 TODO 一步步把空填上。 |
 | `lessons/` | 每章的教学 markdown（7 章已成稿，持续打磨）| 想了解算法 / 数学背景时阅读，配合 notebook 内的 TODO 伪代码使用。 |
 
@@ -91,7 +103,7 @@ python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
    | 2 | `pairformer/` | `pairformer.ipynb` | OuterProductMean / TriangleMul / TriangleAttention / MSAPairWeightedAveraging / PairformerBlock |
    | 3 | `feature_embedding/` | `feature_embedding.ipynb` | RelativePositionEncoding / FourierEmbedding |
    | 4 | `diffusion/` | `diffusion.ipynb` | ConditionedTransitionBlock / DiffusionTransformerBlock / DiffusionTransformer / expressCoordinatesInFrame / centre_random_augmentation |
-   | 5 | `confidence/` | `confidence.ipynb` | DistogramHead |
+   | 5 | `confidence/` | `confidence.ipynb` | DistogramHead + ConfidenceHead 装配 |
    | 6 | `model/` | `overview.ipynb` | 端到端：加载 Protenix 权重 → 推理 → 出 CIF |
 
 4. **章末自查**：每章末尾对应 `python generate_control_values.py

@@ -67,3 +67,16 @@ test_inputs["frame_atoms"] = (
     torch.randn((N_frame_geo, 3, 3), generator=_g_geo, dtype=torch.float64) * 2.0
     + torch.tensor([1.0, 0.5, -0.5], dtype=torch.float64)  # shift each frame off origin
 )
+
+# Masked, *batched* centre_random_augmentation input (Algorithm 19 mask branch).
+# Two batch rows with different masks force the [..., 3] / [..., 1] broadcast
+# that the masked-centering denominator must get right.
+# 带 mask 的批量输入：两行不同 mask，强制走 [...,3]/[...,1] 广播。
+_g_mask = torch.Generator().manual_seed(1)
+test_inputs["coords_masked"] = torch.randn(
+    (2, N_atom_geo, 3), generator=_g_mask, dtype=torch.float64
+) * 3.0 + 5.0  # off-origin so centering is non-trivial
+test_inputs["coords_mask"] = torch.tensor(
+    [[1, 1, 1, 1, 1, 0, 0],
+     [1, 1, 0, 1, 0, 1, 1]], dtype=torch.float64
+)

@@ -2,11 +2,27 @@
 
 [中文版 README](README.md)
 
-An educational, Mac-friendly **AlphaFold 3** reimplementation. A
-chapter-by-chapter Python package layout that loads the official
+An educational, Mac-friendly **guided AF3 / Protenix teaching implementation**.
+A chapter-by-chapter Python package layout that loads the official
 **ByteDance Protenix** checkpoints (the documented disabled ESM projection key
 is safely ignored for tiny/default weights); runs on CPU, Apple-Silicon
 MPS, or CUDA.
+
+## Scope / Non-goals
+
+This is an **educational, guided implementation** — its goal is to make AF3's
+core concepts clear and let you implement each module by hand. It is **not** a
+full, independent scientific reproduction of AF3. Please read the repo with that
+scope in mind:
+
+- **Verified path**: inference-only, using the Protenix Tiny / default
+  checkpoint on the bundled **protein-only** `7r6r` example.
+- **Conceptual only (not verified end-to-end here)**: training / loss, full AF3
+  data-pipeline validation, and broader biological coverage across
+  ligand / RNA / DNA / templates / constraints. The upstream code paths for
+  these are present and worth touring, but this repo ships **no** examples or
+  tests for them — treat them as an "upstream-code tour + concept walkthrough"
+  rather than verified capabilities until examples and tests are added.
 
 ## Project layout
 
@@ -16,7 +32,7 @@ The project is organized into three top-level folders:
 build-af3-from-scratch/
 ├── lessons/      # per-chapter writeups (markdown)
 ├── tutorials/    # fill-in-the-blank version (auto-generated)
-└── solutions/    # complete reference implementation
+└── solutions/    # reference solution for the exercises
     ├── attention/                # MHA + LayerNorm + AttentionPairBias
     ├── feature_extraction/       # JSON / MSA / template → tensors
     ├── feature_embedding/        # input embed + Atom Attention Encoder
@@ -35,7 +51,7 @@ fully-qualified form `from <chapter>.<file> import <Class>`.
 
 | Folder | What's in it | How to use |
 |---|---|---|
-| `solutions/` | Complete reference implementation | Read it after you've done your own pass — try not to peek beforehand. |
+| `solutions/` | Reference solution for the exercises | Read it after you've done your own pass — try not to peek beforehand. |
 | `tutorials/` | Auto-extracted from `solutions/` by `prepare_tutorials.py`. Every wrapped `forward` body is replaced with `pass`, and the TODO block above it carries detailed pseudocode. | Where you fill in the blanks. |
 | `lessons/` | Per-chapter teaching markdown (7 chapters drafted, still polishing) | Read for algorithm / math background, alongside the in-notebook TODO pseudocode. |
 
@@ -96,7 +112,7 @@ takes ~0.5–2 hours.
    | 2 | `pairformer/` | `pairformer.ipynb` | OuterProductMean / TriangleMul / TriangleAttention / MSAPairWeightedAveraging / PairformerBlock |
    | 3 | `feature_embedding/` | `feature_embedding.ipynb` | RelativePositionEncoding / FourierEmbedding |
    | 4 | `diffusion/` | `diffusion.ipynb` | ConditionedTransitionBlock / DiffusionTransformerBlock / DiffusionTransformer / expressCoordinatesInFrame / centre_random_augmentation |
-   | 5 | `confidence/` | `confidence.ipynb` | DistogramHead |
+   | 5 | `confidence/` | `confidence.ipynb` | DistogramHead + ConfidenceHead assembly |
    | 6 | `model/` | `overview.ipynb` | End-to-end: load Protenix weights, run inference, write CIF |
 
 4. **Sanity check after each chapter**:

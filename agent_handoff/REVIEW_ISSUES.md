@@ -994,3 +994,362 @@ inference --input_json examples/does_not_exist.json --ckpt_dir ../checkpoints --
 inference --help
   → prints usage, exit 0 (unaffected)
 ```
+
+### 14. Project scope still reads like an AF3 reimplementation rather than a bounded teaching project
+
+Priority: high
+
+Status: resolved
+
+Audit surface: technical / biological scope clarity for an educational project.
+
+Context:
+
+The owner clarified on 2026-06-23 that this repo should be judged as a
+teaching project: it does **not** need to be a full AF3 reproduction; it should
+make the basic concepts clear and avoid overpromising scientific coverage.
+
+Evidence:
+
+```bash
+rg -n "复现|reimplementation|complete reference|完整参考|任意组合|ligand|rnaSequence|dnaSequence" \
+  README.md README.en.md lessons/README.md lessons/feature_extraction.md
+
+find solutions/examples tutorials/examples -type f | sort
+
+./venv_protenix/bin/python - <<'PY'
+import json
+from pathlib import Path
+for p in [Path("solutions/examples/example.json"), Path("tutorials/examples/example.json")]:
+    data = json.loads(p.read_text())
+    kinds = []
+    for sample in data:
+        for seq in sample.get("sequences", []):
+            kinds.extend(seq.keys())
+    print(p, "samples=", len(data), "sequence_kinds=", sorted(set(kinds)))
+PY
+```
+
+Observed detail:
+
+- `README.md:5` calls the repo an "**AlphaFold 3** 复现项目".
+- `README.en.md:5` calls it an "**AlphaFold 3** reimplementation".
+- The project tree labels `solutions/` as "完整参考实现" / "complete reference
+  implementation".
+- `lessons/feature_extraction.md:20-21` says AF3 handles "蛋白 + 核酸 + 配体 +
+  修饰残基 + 实验约束任意组合" and feature extraction normalizes all of them into
+  a token/atom representation.
+- The committed examples and the repeatedly verified smoke path are only:
+  `7r6r_protein_only`, one `proteinChain`, plus precomputed MSA files. There
+  are no committed ligand/RNA/DNA/multimer examples or end-to-end verification
+  commands showing those biological modes are supported in this teaching repo.
+- `solutions/model/model.py` explicitly supports only `mode="inference"`; the
+  repo does not contain a training/loss pipeline.
+
+Why this matters:
+
+For a teaching project, the code can be valuable without proving full AF3
+biological coverage. But the current top-level wording can make readers infer
+that the repo is a faithful/full AF3 reproduction across proteins, nucleic
+acids, ligands, templates, constraints, and training. That is a stronger claim
+than the audited evidence supports and conflicts with the intended pedagogical
+scope.
+
+Relevant files:
+
+- `README.md`
+- `README.en.md`
+- `lessons/README.md`
+- `lessons/feature_extraction.md`
+- `scripts/build_feature_extraction_notebook.py` if the generated
+  `feature_extraction.ipynb` wording is updated
+- `solutions/feature_extraction/feature_extraction.ipynb`
+- `tutorials/feature_extraction/feature_extraction.ipynb`
+
+Suggested fix direction:
+
+- Add a short "Scope / Non-goals" section near the top of both READMEs:
+  - This is an educational guided implementation / teaching reference, not a
+    full independent AF3 reproduction.
+  - The verified path is inference-only with Protenix Tiny/default checkpoint
+    on the bundled protein-only `7r6r` example.
+  - Training, loss computation, full AF3 data pipeline validation, and broad
+    biological coverage across ligand/RNA/DNA/templates/constraints are out of
+    scope unless future examples/tests are added.
+- Soften "复现项目" / "reimplementation" to wording such as "教学拆解项目",
+  "guided AF3/Protenix teaching implementation", or "from-scratch educational
+  walkthrough".
+- Rename "完整参考实现" / "complete reference implementation" to "教学参考答案" /
+  "reference solution for the exercises" so it is not read as a full scientific
+  reference implementation.
+- In `lessons/feature_extraction.md` and its generated notebook, keep the AF3
+  biological explanation, but explicitly separate:
+  - "AF3/Protenix are designed to cover these entity types"
+  - "this repo's committed lesson/smoke path demonstrates protein-only input"
+  - "other entity types should be treated as conceptual/upstream-code tour
+    unless examples and tests are added"
+- If notebook wording changes, edit the relevant script and regenerate
+  notebooks plus `prepare_tutorials.py`.
+
+After fixing, run:
+
+```bash
+rg -n "复现|reimplementation|complete reference|完整参考|Scope|Non-goals|范围|非目标|protein-only|inference-only" \
+  README.md README.en.md lessons/README.md lessons/feature_extraction.md
+
+./venv_protenix/bin/python scripts/build_feature_extraction_notebook.py
+./venv_protenix/bin/python prepare_tutorials.py
+diff -q solutions/feature_extraction/feature_extraction.ipynb tutorials/feature_extraction/feature_extraction.ipynb || true
+```
+
+**Resolution (2026-06-23, fix agent)**: Reframed the project as a bounded
+teaching project per the owner's 2026-06-23 clarification.
+
+- Both README openings: "复现项目" → "教学拆解项目" /
+  "reimplementation" → "guided AF3 / Protenix teaching implementation".
+- Added a "范围与非目标 / Scope / Non-goals" section near the top of both
+  READMEs spelling out the **verified path** (inference-only, Protenix
+  tiny/default, protein-only `7r6r`) vs **conceptual-only** areas (training /
+  loss, full data-pipeline validation, ligand / RNA / DNA / templates /
+  constraints — upstream code present but no examples/tests shipped).
+- "完整参考实现" / "complete reference implementation" → "教学参考答案（练习的
+  参考实现）" / "reference solution for the exercises" in both the tree comment
+  and the companion-folders table.
+- `lessons/feature_extraction.md`: kept the AF3 biological explanation but
+  marked it as AF3/Protenix **design** goals and added a "本仓库范围提示" blockquote
+  separating the verified protein-only path from the conceptual upstream-code
+  tour, pointing back to the README Scope section.
+
+Did NOT regenerate the feature_extraction notebook: it does not carry the
+"任意组合" overclaim (verified via grep on
+`scripts/build_feature_extraction_notebook.py` and the committed `.ipynb`), so
+no notebook/`prepare_tutorials` change was needed for this issue. Left the two
+remaining "复现" mentions intentionally: README.md's is the negation
+("**不是**…复现"), and lessons/README.md's refers to **Protenix itself** being
+AF3's open-source reproduction (accurate, not a claim about this repo).
+
+Verification:
+
+```text
+grep -n "复现|reimplementation|complete reference|完整参考" README.md README.en.md
+    lessons/README.md lessons/feature_extraction.md
+  → only the negation (README.md:12) and the Protenix-describes (lessons/README.md:53)
+    remain; no self-overclaim.
+grep -n "范围与非目标|Scope / Non-goals|protein-only|纯蛋白" README.md README.en.md
+    lessons/feature_extraction.md  → Scope sections + protein-only caveat present.
+```
+
+### 15. README learning path understates what the confidence chapter asks students to implement
+
+Priority: low
+
+Status: resolved
+
+Audit surface: teaching-path consistency.
+
+Evidence:
+
+```bash
+rg -n "confidence|Confidence|Distogram|ConfidenceHead|DistogramHead" \
+  README.md README.en.md lessons/README.md lessons/confidence.md \
+  solutions/confidence/confidence.ipynb tutorials/confidence/confidence.ipynb
+```
+
+Relevant output:
+
+```text
+README.md:94
+| 5 | `confidence/` | `confidence.ipynb` | DistogramHead |
+
+README.en.md:99
+| 5 | `confidence/` | `confidence.ipynb` | DistogramHead |
+
+lessons/README.md:38
+| 5 | `confidence.md` | Confidence head + DistogramHead + pTM/iPTM/pLDDT | Alg 1 line 17, 31 |
+
+solutions/confidence/confidence.ipynb
+5.1 DistogramHead ...
+5.2 ConfidenceHead 装配检查 ...
+章节小结:
+1. DistogramHead.forward
+2. ConfidenceHead.__init__
+```
+
+Observed detail:
+
+- The top-level README learning-path table says the confidence chapter builds
+  only `DistogramHead`.
+- The actual confidence notebook and lesson also ask students to implement /
+  validate `ConfidenceHead.__init__` via a state-dict shape check.
+- `lessons/README.md` already describes the chapter more accurately.
+
+Why this matters:
+
+This is not a runtime bug, but it affects the teaching contract. A student
+following the top-level learning path may expect a tiny chapter and then be
+surprised by a second, much larger `ConfidenceHead` assembly task.
+
+Relevant files:
+
+- `README.md`
+- `README.en.md`
+
+Suggested fix direction:
+
+- Update the README learning-path row for chapter 5:
+  - Chinese: `DistogramHead + ConfidenceHead 装配`
+  - English: `DistogramHead + ConfidenceHead assembly`
+- No notebook regeneration is needed unless the notebook wording itself is
+  changed.
+
+After fixing, run:
+
+```bash
+rg -n "confidence/.*DistogramHead|ConfidenceHead assembly|ConfidenceHead 装配" README.md README.en.md lessons/README.md
+```
+
+**Resolution (2026-06-23, fix agent)**: Updated the chapter-5 learning-path row
+in both READMEs to reflect both tasks. `README.md:94` now reads
+`DistogramHead + ConfidenceHead 装配`; `README.en.md:99` now reads
+`DistogramHead + ConfidenceHead assembly`. No notebook regeneration needed (the
+notebook/lesson wording was already accurate; only the top-level table
+understated the work). `lessons/README.md` already described it correctly and
+was left unchanged.
+
+Verification:
+
+```text
+grep -n "DistogramHead" README.md README.en.md
+  → README.md:94    ... | DistogramHead + ConfidenceHead 装配 |
+    README.en.md:99 ... | DistogramHead + ConfidenceHead assembly |
+```
+
+### 16. `centre_random_augmentation(mask=...)` broadcasts incorrectly and is untested
+
+Priority: high
+
+Status: resolved
+
+Audit surface: technical correctness / diffusion geometry invariant.
+
+Evidence:
+
+```bash
+cd solutions
+../venv_protenix/bin/python - <<'PY'
+import torch
+from model.utils import centre_random_augmentation
+
+x = torch.randn(2, 7, 3)
+mask = torch.ones(2, 7)
+try:
+    centre_random_augmentation(x, N_sample=1, centre_only=True, mask=mask)
+except Exception as e:
+    print(type(e).__name__, e)
+PY
+```
+
+Current result:
+
+```text
+RuntimeError The size of tensor a (3) must match the size of tensor b (2) at non-singleton dimension 1
+```
+
+Observed detail:
+
+- The function docstring says `mask` has shape `[..., N_atom]`, and the test
+  above follows that contract.
+- The implementation computes:
+
+```python
+center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / (
+    mask.sum(dim=-1) + eps
+)
+```
+
+  The numerator has shape `[..., 3]`, but `mask.sum(dim=-1)` has shape `[...]`.
+  For batched inputs such as `[2, 7, 3]`, PyTorch cannot broadcast `[2]` over
+  `[2, 3]`; the denominator needs `keepdim=True` or `.unsqueeze(-1)`.
+- Existing control values only cover `centre_only=True` without a mask, so this
+  masked branch is currently not tested.
+- `solutions/diffusion/sampler.py::sample_diffusion_training` passes
+  `mask=label_dict["coordinate_mask"]`, so the helper's training/label
+  augmentation path would also fail if used. Even if the public teaching path
+  is inference-only, Algorithm 19's masked-centering concept should not be
+  broken.
+
+Relevant files:
+
+- `solutions/model/utils.py`
+- `tutorials/model/utils.py`
+- `solutions/diffusion/control_values/_generate.py`
+- `tutorials/diffusion/control_values/_generate.py`
+- `solutions/diffusion/control_values/diffusion_checks.py`
+- matching tutorial control-value files
+
+Suggested fix direction:
+
+- Change the denominator to preserve the coordinate axis, for example:
+
+```python
+denom = mask.sum(dim=-1, keepdim=True) + eps
+center = (x_input_coords * mask.unsqueeze(dim=-1)).sum(dim=-2) / denom
+```
+
+- Verify that masked atoms are treated consistently:
+  - centering mean should be computed over unmasked atoms only
+  - after full random augmentation, masked atoms should remain zeroed by the
+    existing `x_augment_coords * mask[..., None, :, None]` line
+- Add a deterministic masked `centre_only=True` control-value check. That is
+  enough to catch the current broadcasting bug without introducing random SO(3)
+  reproducibility issues.
+- Run `python prepare_tutorials.py` after editing `solutions/model/utils.py`
+  and control-value files.
+
+After fixing, run:
+
+```bash
+./venv_protenix/bin/python generate_control_values.py --verify --src solutions --chapters diffusion
+./venv_protenix/bin/python generate_control_values.py --verify --src solutions
+
+cd solutions
+../venv_protenix/bin/python - <<'PY'
+import torch
+from model.utils import centre_random_augmentation
+x = torch.randn(2, 7, 3)
+mask = torch.tensor([[1,1,1,1,1,0,0], [1,1,0,1,0,1,1]], dtype=torch.float32)
+y = centre_random_augmentation(x, N_sample=1, centre_only=True, mask=mask)
+masked_mean = (y[:, 0] * mask[..., None]).sum(dim=-2) / mask.sum(dim=-1, keepdim=True)
+print(masked_mean.abs().max())
+assert torch.allclose(masked_mean, torch.zeros_like(masked_mean), atol=1e-6)
+PY
+```
+
+**Resolution (2026-06-23, fix agent)**: Fixed the broadcasting bug in
+`centre_random_augmentation`'s masked-centering branch
+(`solutions/model/utils.py`): the denominator is now
+`mask.sum(dim=-1, keepdim=True) + eps` (was `mask.sum(dim=-1)`), so the
+`[..., 3]` numerator divides by `[..., 1]` and batched inputs like
+`[B, N_atom, 3]` broadcast correctly. The same one-line fix was applied to BOTH
+the English and Chinese TODO pseudocode in the docstring so students aren't
+taught the broken form. The masked post-augmentation zeroing line
+(`x_augment_coords * mask[..., None, :, None]`) was already correct and is
+unchanged.
+
+Added a regression control value: a deterministic, *batched*, masked
+`centre_only=True` check. New test inputs `coords_masked` ([2, 7, 3], fixed-seed
+Gaussian, off-origin) and `coords_mask` (two rows with different masks) in
+`diffusion_checks.py`; new save/verify block + `.pt`
+(`centre_random_augmentation_masked_out.pt`) in `_generate.py`. This exercises
+exactly the `[B,3]/[B,1]` broadcast that was failing, without any random-SO(3)
+reproducibility concerns. Propagated to `tutorials/` via `prepare_tutorials.py`.
+
+Verification (`venv_protenix`, torch 2.12):
+
+```text
+generate_control_values.py --verify --src solutions --chapters diffusion → passed
+generate_control_values.py --verify --src solutions                      → all 6 chapters passed
+masked-mean smoke (audit's snippet):
+  masked mean abs max: 7.15e-08
+  PASS: masked centering produces zero-mean over unmasked atoms
+```

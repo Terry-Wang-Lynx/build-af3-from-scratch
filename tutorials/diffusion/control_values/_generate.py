@@ -134,6 +134,31 @@ def main(overwrite: bool = True) -> None:
             "centre_random_augmentation(centre_only=True) output mismatch"
         )
 
+    # ----- centre_random_augmentation with a mask (batched, centre_only) ------
+    # Exercises the masked-centering branch on a *batched* input ([B, N_atom, 3])
+    # — the case where the denominator must keep the coordinate axis to
+    # broadcast. A deterministic centre_only check catches the broadcasting bug
+    # without random-SO(3) reproducibility concerns. The post-centering masked
+    # mean must be ~0.
+    # 用带 mask 的批量输入测掩码居中分支（去噪点必须保留坐标轴才能广播）。
+    with torch.no_grad():
+        cra_masked = centre_random_augmentation(
+            test_inputs["coords_masked"].double(),
+            N_sample=1,
+            centre_only=True,
+            mask=test_inputs["coords_mask"].double(),
+        )
+    cra_masked_path = os.path.join(
+        CONTROL_FOLDER, "centre_random_augmentation_masked_out.pt"
+    )
+    if overwrite:
+        torch.save(cra_masked, cra_masked_path)
+    else:
+        expected = torch.load(cra_masked_path)
+        assert torch.allclose(cra_masked, expected, atol=1e-7), (
+            "centre_random_augmentation(mask=..., centre_only=True) output mismatch"
+        )
+
     if overwrite:
         print(f"Wrote control values under {CONTROL_FOLDER}")
     else:
