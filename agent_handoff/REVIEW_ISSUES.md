@@ -724,3 +724,101 @@ python check_solutions.py --src solutions --chapters feature_extraction \
 → running feature_extraction/feature_extraction.ipynb … PASS (19.5s)
 → all 1 notebook(s) passed
 ```
+
+### 11. `model.inference` module docstring contains a subtly broken copy-paste command
+
+Priority: low
+
+Status: resolved
+
+Audit surface: endpoint inference smoke tests / examples and command
+copy-pasteability.
+
+Evidence:
+
+```bash
+rg -n -- '--ckpt_dir|--input_json|--dump_dir|--device' \
+  README.md README.en.md solutions/model/inference.py tutorials/model/inference.py
+```
+
+Relevant output:
+
+```text
+README.md:187-190
+    --input_json examples/example.json \
+    --dump_dir   ./out \
+    --ckpt_dir   ../checkpoints \
+    --device     mps            # 或 cpu / cuda
+
+solutions/model/inference.py:8-11
+        --input_json examples/example.json \\
+        --dump_dir   ./out \\
+        --device     mps          # or cpu / cuda
+        --ckpt_dir   ../checkpoints
+```
+
+Observed detail:
+
+- The README command is copy-pasteable and includes `--ckpt_dir` before the
+  inline device comment.
+- The module docstring command in both `solutions/model/inference.py` and
+  `tutorials/model/inference.py` puts `--ckpt_dir` after a `--device ... #
+  or cpu / cuda` line that has no continuation. If copied into a shell,
+  `--ckpt_dir ../checkpoints` is not part of the command. The process then
+  falls back to the default `solutions/checkpoints`, which is the wrong path
+  for the documented repo-root `checkpoints/` download.
+
+Smoke context:
+
+```bash
+cd solutions
+../venv_protenix/bin/python -m model.inference \
+  --input_json examples/example.json \
+  --dump_dir ../test_outputs/heartbeat_smoke_1451 \
+  --device cpu \
+  --ckpt_dir ../checkpoints \
+  --n_cycle 1 --n_step 1 --n_sample 1
+```
+
+Result: passed; wrote CIF and summary JSON, with pLDDT about 73.94 and pTM
+about 0.62. So the endpoint itself is working; this issue is about the
+module-level usage text.
+
+Relevant files:
+
+- `solutions/model/inference.py`
+- `tutorials/model/inference.py`
+
+Suggested fix direction:
+
+- Reorder the docstring usage command to match README:
+  `--input_json`, `--dump_dir`, `--ckpt_dir`, then `--device`.
+- Alternatively keep `--device` before `--ckpt_dir`, but add a continuation
+  marker before the inline comment and move the comment onto its own line.
+- After editing `solutions/model/inference.py`, run `python prepare_tutorials.py`
+  so `tutorials/model/inference.py` stays generated from the solution.
+
+After fixing, run:
+
+```bash
+rg -n -- '--ckpt_dir|--input_json|--dump_dir|--device' \
+  README.md README.en.md solutions/model/inference.py tutorials/model/inference.py
+```
+
+**Resolution (2026-06-22, fix agent)**: Reordered the usage command in the
+`solutions/model/inference.py` module docstring to match the README's order and
+copy-paste safety: `--input_json`, `--dump_dir`, `--ckpt_dir` (now carrying a
+`\\` line-continuation), then `--device mps  # or cpu / cuda` as the final
+line. Previously `--device` was second-to-last and ended the command (the inline
+comment with no continuation), orphaning `--ckpt_dir ../checkpoints` so a
+copy-paste silently fell back to the default `solutions/checkpoints`. Re-ran
+`prepare_tutorials.py` so `tutorials/model/inference.py` inherits the same fix.
+
+Verification:
+
+```text
+grep -n -- '--ckpt_dir|--input_json|--dump_dir|--device' \
+    solutions/model/inference.py tutorials/model/inference.py
+  → both docstrings: lines 8-11 now read input_json \  dump_dir \  ckpt_dir \  device
+    (every line before --device ends with \\, so the whole command pastes intact)
+```

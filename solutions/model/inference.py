@@ -7,8 +7,8 @@ Usage / 用法 (run from ``solutions/``):
         --model_name protenix_tiny_default_v0.5.0 \\
         --input_json examples/example.json \\
         --dump_dir   ./out \\
+        --ckpt_dir   ../checkpoints \\
         --device     mps          # or cpu / cuda
-        --ckpt_dir   ../checkpoints
 
 Steps / 流程:
   1. Parse model + inference config.
