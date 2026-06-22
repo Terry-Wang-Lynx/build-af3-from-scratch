@@ -883,3 +883,114 @@ grep -n "unchanged|fully compatible|bit-for-bit|safely ignored|largely compatibl
     README.en.md README.md
   → only the intended "safely ignored" / "largely compatible" phrasings remain
 ```
+
+### 13. Inference CLI validates missing input paths too late and exits with raw tracebacks
+
+Priority: medium
+
+Status: resolved
+
+Audit surface: endpoint inference error handling / public CLI ergonomics.
+
+Evidence:
+
+```bash
+cd solutions
+
+../venv_protenix/bin/python -m model.inference \
+  --input_json examples/example.json \
+  --dump_dir ../test_outputs/missing_ckpt_check \
+  --device cpu \
+  --ckpt_dir ../does_not_exist \
+  --n_cycle 1 --n_step 1 --n_sample 1
+
+../venv_protenix/bin/python -m model.inference \
+  --input_json examples/does_not_exist.json \
+  --dump_dir ../test_outputs/missing_json_check \
+  --device cpu \
+  --ckpt_dir ../checkpoints \
+  --n_cycle 1 --n_step 1 --n_sample 1
+```
+
+Observed result:
+
+- Missing checkpoint path spends about 10 seconds building the 109.50M-param
+  model, then exits with a raw traceback:
+
+```text
+AssertionError: Checkpoint not found: ../does_not_exist/protenix_tiny_default_v0.5.0.pt
+```
+
+- Missing input JSON also builds the model and loads the checkpoint first, then
+  exits with a raw traceback from the dataloader:
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'examples/does_not_exist.json'
+```
+
+- `python -m model.inference --help` works, so this is specifically about
+  runtime path validation and user-facing error messages.
+
+Relevant files:
+
+- `solutions/model/inference.py`
+- `tutorials/model/inference.py`
+- possibly `solutions/feature_extraction/inference/infer_dataloader.py` if
+  input path validation is centralized there
+
+Why this matters:
+
+These are the two most common first-run mistakes for new users: forgetting to
+download the checkpoint or pointing at the wrong JSON file. The current CLI
+does extra expensive work before failing and presents a Python traceback
+instead of an actionable command-line error.
+
+Suggested fix direction:
+
+- Validate `args.input_json` and the computed `ckpt_path` immediately after
+  parsing args, before seeding, config/model construction, or checkpoint load.
+- Replace the `assert exists(ckpt_path)` with an explicit user-facing error
+  path. `argparse.ArgumentParser.error(...)` is a good fit because it exits
+  with code 2 and prints usage plus the concrete missing path.
+- Consider checking `args.ckpt_dir` separately so the message can say whether
+  the directory is missing or the model-specific `.pt` file is missing.
+- After editing `solutions/model/inference.py`, run `python prepare_tutorials.py`
+  so the generated tutorial copy stays in sync.
+
+After fixing, run:
+
+```bash
+cd solutions
+../venv_protenix/bin/python -m model.inference --input_json examples/example.json --ckpt_dir ../does_not_exist --device cpu
+../venv_protenix/bin/python -m model.inference --input_json examples/does_not_exist.json --ckpt_dir ../checkpoints --device cpu
+../venv_protenix/bin/python -m model.inference --help
+```
+
+Expected: concise CLI errors for the first two commands, no Python traceback,
+and no model construction before path validation fails.
+
+**Resolution (2026-06-22, fix agent)**: Added an early path-validation block in
+`solutions/model/inference.py` immediately after `ap.parse_args()` — before
+`seed_everything`, config build, model construction, or checkpoint load. It
+checks, in order: `--input_json` exists; `--ckpt_dir` exists (with a hint to
+download the checkpoint per the README); and the model-specific
+`{model_name}.pt` exists inside it (distinguishing a missing directory from a
+missing file). Each failure calls `ap.error(...)`, which prints usage + a
+concrete message and exits with code 2 — no raw traceback. Removed the old late
+`assert exists(ckpt_path)` (the path is now validated up front and `ckpt_path`
+is computed in the early block). Re-ran `prepare_tutorials.py` so
+`tutorials/model/inference.py` inherits the same guard.
+
+Verification (run with `venv_protenix`, torch 2.12 — the conda env's torch
+2.3.1 fails at module import on an unrelated `add_safe_globals`, pre-existing):
+
+```text
+inference --input_json examples/example.json --ckpt_dir ../does_not_exist --device cpu
+  → "inference.py: error: --ckpt_dir not found: ../does_not_exist\n
+     Download the checkpoint first ..."  exit code 2, no model build, no traceback
+inference --input_json examples/does_not_exist.json --ckpt_dir ../checkpoints --device cpu
+  → "inference.py: error: --input_json not found: examples/does_not_exist.json"
+     exit code 2, no traceback
+inference --help
+  → prints usage, exit 0 (unaffected)
+```

@@ -180,6 +180,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--n_sample", type=int, default=1, help="Diffusion samples")
     args = ap.parse_args(argv)
 
+    # ---- Validate paths early, before any expensive work ----
+    # Forgetting the checkpoint download or mistyping the input JSON are the two
+    # most common first-run mistakes. Catch them here (before seeding / building
+    # the 100M+ param model / loading weights) and report via ap.error(), which
+    # prints usage + a concrete message and exits with code 2 — no raw traceback.
+    # 提前校验路径：最常见的两个首次运行错误（没下权重 / JSON 路径写错）在
+    # 构建模型、加载权重之前就拦截，用 ap.error() 给出可读报错并以退出码 2 退出。
+    if not exists(args.input_json):
+        ap.error(f"--input_json not found: {args.input_json}")
+    ckpt_path = join(args.ckpt_dir, f"{args.model_name}.pt")
+    if not exists(args.ckpt_dir):
+        ap.error(
+            f"--ckpt_dir not found: {args.ckpt_dir}\n"
+            "Download the checkpoint first (see the README 'Download a "
+            "checkpoint' section)."
+        )
+    if not exists(ckpt_path):
+        ap.error(
+            f"checkpoint file not found: {ckpt_path}\n"
+            f"(--ckpt_dir '{args.ckpt_dir}' exists but has no "
+            f"'{args.model_name}.pt'; check --model_name / --ckpt_dir.)"
+        )
+
     seed_everything(args.seed, deterministic=False)
     device = pick_device(args.device)
     logger.info("Device: %s", device)
@@ -199,8 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     n = sum(p.numel() for p in model.parameters())
     logger.info("Parameters: %.2f M", n / 1e6)
 
-    ckpt_path = join(args.ckpt_dir, f"{args.model_name}.pt")
-    assert exists(ckpt_path), f"Checkpoint not found: {ckpt_path}"
+    # ckpt_path was validated to exist right after arg parsing.
     load_checkpoint(model, ckpt_path)
     model = model.to(device)
 
