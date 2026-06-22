@@ -822,3 +822,64 @@ grep -n -- '--ckpt_dir|--input_json|--dump_dir|--device' \
   → both docstrings: lines 8-11 now read input_json \  dump_dir \  ckpt_dir \  device
     (every line before --device ends with \\, so the whole command pastes intact)
 ```
+
+### 12. English README opening still says checkpoints load "unchanged"
+
+Priority: medium
+
+Status: resolved
+
+Audit surface: README/install accuracy and public claims suitable for open
+source.
+
+Evidence:
+
+```bash
+rg -n "unchanged|out of the box|开箱即用|基本兼容|safely ignored|disabled ESM" \
+  README.md README.en.md
+```
+
+Observed detail:
+
+- Issues #3 and #7 softened the compatibility claims because the tiny/default
+  checkpoint loads with `missing=0 unexpected=1`, where the unexpected key is
+  `input_embedder.linear_esm.weight`.
+- Most README wording is now accurate, but the English README opening still
+  said the project "loads the official ByteDance Protenix checkpoints
+  unchanged".
+- That is stronger than the verified behavior and conflicts with the later
+  "largely compatible / safely ignored disabled ESM key" wording.
+- The Chinese opening says "可直接加载", which is less strict and was left as-is.
+
+Relevant file:
+
+- `README.en.md`
+
+After fixing, run:
+
+```bash
+rg -n "unchanged|fully compatible|bit-for-bit|safely ignored|largely compatible" README.en.md README.md
+```
+
+**Resolution (2026-06-22, fix agent)**: Reworded the `README.en.md` opening
+sentence (line 5-8). Replaced "loads the official **ByteDance Protenix**
+checkpoints unchanged" with "loads the official **ByteDance Protenix**
+checkpoints (the documented disabled ESM projection key is safely ignored for
+tiny/default weights)", bringing the top-of-file claim in line with the
+softened wording established by issues #3 and #7. Left the Chinese opening's
+"可直接加载" as-is (already non-strict, per the audit's note). Did not touch the
+detailed workflow / feature sections — they were already accurate.
+
+Note: the audit appended this issue inside issue #11's block (between #11's
+Evidence and its body), which had stranded #11's Resolution. While resolving
+this, the fix agent also restored #11 to a single contiguous block and moved
+issue #12 to its own block at the end of the file.
+
+Verification:
+
+```text
+grep -n "unchanged" README.en.md          → no matches (overclaim removed)
+grep -n "unchanged|fully compatible|bit-for-bit|safely ignored|largely compatible" \
+    README.en.md README.md
+  → only the intended "safely ignored" / "largely compatible" phrasings remain
+```

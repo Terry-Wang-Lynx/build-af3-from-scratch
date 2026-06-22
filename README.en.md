@@ -4,7 +4,8 @@
 
 An educational, Mac-friendly **AlphaFold 3** reimplementation. A
 chapter-by-chapter Python package layout that loads the official
-**ByteDance Protenix** checkpoints unchanged; runs on CPU, Apple-Silicon
+**ByteDance Protenix** checkpoints (the documented disabled ESM projection key
+is safely ignored for tiny/default weights); runs on CPU, Apple-Silicon
 MPS, or CUDA.
 
 ## Project layout
