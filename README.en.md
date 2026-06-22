@@ -177,7 +177,11 @@ pip install torch torchvision \
             rdkit biopython biotite modelcif gemmi pdbeccdutils \
             ml-collections scipy pandas scikit-learn scikit-learn-extra \
             matplotlib ipykernel ipywidgets py3dmol icecream fair-esm \
-            nbformat nbconvert
+            nbformat nbconvert \
+            optree requests packaging typing-extensions
+# Optional speed-ups: lmdb for .lmdb inputs, orjson for faster JSON parsing
+# (code falls back to stdlib json if orjson is absent):
+#   pip install lmdb orjson
 ```
 
 ### 2. Download a checkpoint

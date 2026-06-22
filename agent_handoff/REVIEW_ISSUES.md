@@ -496,3 +496,139 @@ grep -c "WITHOUT WARRANTY OF ANY KIND" THIRD_PARTY_NOTICES.md → 1 (full MIT te
 grep -l "MIT License|Apache License, Version 2.0|ByteDance|Kilian|AlQuraishi|OpenFold" \
      LICENSE THIRD_PARTY_NOTICES.md README.md README.en.md → all four match
 ```
+
+### 9. Direct Python imports are missing from the documented environment specs
+
+Priority: medium
+
+Status: resolved
+
+Audit surface: dependency / environment reproducibility.
+
+Evidence:
+
+```bash
+./venv_protenix/bin/python - <<'PY'
+import ast
+from pathlib import Path
+
+roots = [Path("solutions"), Path("tutorials"), Path("scripts")]
+files = [Path("check_solutions.py"), Path("generate_control_values.py"), Path("prepare_tutorials.py")]
+for root in roots:
+    files.extend(root.rglob("*.py"))
+
+mods = {}
+for p in files:
+    tree = ast.parse(p.read_text())
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                mods.setdefault(a.name.split(".")[0], set()).add(str(p))
+        elif isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
+            mods.setdefault(n.module.split(".")[0], set()).add(str(p))
+
+for name in ["optree", "requests", "packaging", "typing_extensions", "lmdb", "orjson"]:
+    print(name, sorted(mods.get(name, []))[:5], "count=", len(mods.get(name, [])))
+PY
+
+rg -n "optree|requests|packaging|typing-extensions|typing_extensions|lmdb|orjson" \
+  environment_cpu.yml environment_mac.yml README.md README.en.md
+```
+
+Observed detail:
+
+- `solutions/model/utils.py` and `tutorials/model/utils.py` unconditionally
+  `import optree`; `_fetch_dims()` uses it during model utility code.
+- `solutions/feature_extraction/template/template_utils.py` directly imports
+  `requests`.
+- `solutions/feature_extraction/core/parser.py` directly imports
+  `packaging.version`.
+- template feature-extraction files directly import `typing_extensions`.
+- `solutions/runtime/file_io.py` optionally imports `lmdb` for `.lmdb` paths
+  and `orjson` for JSON loading fast-path.
+- None of these names appear in `environment_cpu.yml`, `environment_mac.yml`,
+  or the README pip install blocks. In the local venv, `optree` is present only
+  because some prior install pulled it in (`pip show optree` reports
+  `Required-by: protenix`), but this repo's documented install path does not
+  install `protenix`.
+
+Relevant files:
+
+- `environment_cpu.yml`
+- `environment_mac.yml`
+- `README.md`
+- `README.en.md`
+- `solutions/model/utils.py`
+- `solutions/feature_extraction/core/parser.py`
+- `solutions/feature_extraction/template/template_utils.py`
+- `solutions/runtime/file_io.py`
+- matching files under `tutorials/`
+
+Why this matters:
+
+For open-source users, direct imports should be explicit in either the conda
+environment files or the pip install instructions. Relying on unrelated
+transitive dependencies is fragile: a resolver update can remove `optree` or
+`requests` from the environment even though project code imports them directly.
+
+Suggested fix direction:
+
+- Add direct runtime dependencies to both conda environment files and both
+  README pip install blocks:
+  - `optree`
+  - `requests`
+  - `packaging`
+  - `typing-extensions` (pip name) / `typing_extensions` import
+- Decide whether `.lmdb` and `orjson` support is intended to be optional:
+  - If optional, document `lmdb` and `orjson` as optional extras / advanced
+    feature-extraction dependencies.
+  - If supported out of the box, add them to the environment files and pip
+    install blocks as well.
+
+After fixing, run:
+
+```bash
+rg -n "optree|requests|packaging|typing-extensions|typing_extensions|lmdb|orjson" \
+  environment_cpu.yml environment_mac.yml README.md README.en.md
+
+./venv_protenix/bin/python - <<'PY'
+import optree, requests, packaging, typing_extensions
+from solutions.model import utils as model_utils
+print("dependency smoke passed", model_utils._fetch_dims({"x": __import__("torch").zeros(2, 3)}))
+PY
+```
+
+**Resolution (2026-06-22, fix agent)**: Confirmed the audit's classification by
+inspecting each import site:
+
+- `optree` (model/utils.py:20), `requests` (template/template_utils.py:25),
+  `packaging` (core/parser.py:48), `typing_extensions`
+  (template/template_featurizer.py:23 + template/template_utils.py:28) are all
+  **unconditional** imports → promoted to first-class declared dependencies.
+- `lmdb` is imported only under `if TYPE_CHECKING:` (file_io.py:23 — zero
+  runtime cost) and `orjson` is imported inside a `try/except ImportError`
+  with a stdlib-json fallback (file_io.py:255) → genuinely **optional**, so
+  documented as commented-out optional extras rather than hard deps.
+
+Changes:
+
+- `environment_cpu.yml` + `environment_mac.yml`: added `optree`, `requests`,
+  `packaging`, `typing_extensions` under a new "direct runtime imports"
+  comment, plus a commented optional block for `lmdb` / `orjson`.
+- `README.md` + `README.en.md`: appended
+  `optree requests packaging typing-extensions` to the pip install line (note
+  the pip distribution name is `typing-extensions` with a hyphen), with a
+  comment line documenting the optional `lmdb` / `orjson` extras.
+
+Verification:
+
+```text
+grep -n "optree|requests|packaging|typing[-_]extensions|lmdb|orjson" \
+    environment_cpu.yml environment_mac.yml README.md README.en.md
+  → all four files now declare the four required deps + document the two optional ones
+
+python -c "import optree, requests, packaging, typing_extensions; \
+           from model import utils; import torch; \
+           print(utils._fetch_dims({'x': torch.zeros(2,3)}))"   (sys.path=solutions)
+  → dependency smoke passed; _fetch_dims = [torch.Size([2, 3])]
+```

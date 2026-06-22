@@ -34,5 +34,13 @@ dependencies:
   - ipywidgets
   - icecream
   - ipdb
+  # direct runtime imports (do not rely on transitive deps)
+  - optree
+  - requests
+  - packaging
+  - typing_extensions
+  # optional fast paths (uncomment if you use .lmdb inputs / want faster JSON):
+  #   - lmdb     # only needed for .lmdb feature caches
+  #   - orjson   # JSON fast-path; code falls back to stdlib json if absent
   - pip:
     - fair-esm==2.0.0

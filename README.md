@@ -161,7 +161,10 @@ pip install torch torchvision \
             rdkit biopython biotite modelcif gemmi pdbeccdutils \
             ml-collections scipy pandas scikit-learn scikit-learn-extra \
             matplotlib ipykernel ipywidgets py3dmol icecream fair-esm \
-            nbformat nbconvert
+            nbformat nbconvert \
+            optree requests packaging typing-extensions
+# 可选加速：.lmdb 输入需要 lmdb，更快的 JSON 解析可装 orjson（缺失会自动回退 stdlib json）
+#   pip install lmdb orjson
 ```
 
 ### 2. 下载权重
