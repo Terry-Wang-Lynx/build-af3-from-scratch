@@ -257,3 +257,85 @@ intentional "child module is uninitialised" friendly error before the student
 fills in `__init__` bodies — that is the expected starter-kit state, not a
 regression.
 
+### 6. New audit finding: diffusion still fails on centre_random_augmentation tolerance
+
+Priority: high
+
+Status: open
+
+Reviewer re-ran the checks after commit `3672059`:
+
+```bash
+./venv_protenix/bin/python generate_control_values.py --verify --src solutions --chapters diffusion
+./venv_protenix/bin/python generate_control_values.py --verify --src solutions
+```
+
+Both still fail in the diffusion chapter, but the failing assertion moved from
+`expressCoordinatesInFrame` to:
+
+```text
+AssertionError: centre_random_augmentation(centre_only=True) output mismatch
+```
+
+Observed detail:
+
+```text
+shape:    (2, 7, 3) vs (2, 7, 3)
+dtype:    torch.float64 vs torch.float64
+max abs:  5.1089695521763397e-08
+```
+
+The mismatch is tiny and concentrated around the theoretically centered zero
+row. Example current output around the center:
+
+```text
+[ 2.5545e-08, -5.1090e-08, -2.5545e-08]
+```
+
+Saved reference expects exact zeros:
+
+```text
+[0.0, 0.0, 0.0]
+```
+
+Relevant files:
+
+- `solutions/diffusion/control_values/_generate.py`
+- `solutions/diffusion/control_values/centre_random_augmentation_centre_only_out.pt`
+- matching files under `tutorials/diffusion/control_values/`
+- `solutions/model/utils.py` (`centre_random_augmentation`)
+
+Likely fix direction:
+
+- Prefer adding an explicit tolerance to this pure-function check in
+  `solutions/diffusion/control_values/_generate.py`, for example
+  `torch.allclose(cra_out, expected, atol=1e-7, rtol=1e-5)`, because the
+  semantic result is unchanged and exact zeros are too strict for floating
+  reduction order.
+- Mirror any `_generate.py` changes to `tutorials` if needed.
+- If regenerating the `.pt` instead, also consider whether it will remain
+  stable across PyTorch / BLAS backends; tolerance is likely more robust.
+
+After fixing, run:
+
+```bash
+./venv_protenix/bin/python generate_control_values.py --verify --src solutions --chapters diffusion
+./venv_protenix/bin/python generate_control_values.py --verify --src solutions
+```
+
+**Resolution (2026-06-22, fix agent)**: Took the audit's preferred path —
+added an explicit `atol=1e-7` to the `torch.allclose` call for the
+`centre_random_augmentation(centre_only=True)` check in
+`solutions/diffusion/control_values/_generate.py:128`, with an inline comment
+explaining that the post-centering "zero" row is in fact ~5e-8 due to
+reduction order and is numerically irrelevant. Did not regenerate the `.pt`,
+since the residual is genuinely just reduction-order noise that would shift
+again on a different BLAS / PyTorch build — tolerance is the robust choice.
+Re-ran `prepare_tutorials.py` to propagate. Verification:
+
+```text
+LAYERNORM_TYPE=torch python generate_control_values.py --verify --src solutions --chapters diffusion
+→ All diffusion/ control checks passed
+LAYERNORM_TYPE=torch python generate_control_values.py --verify --src solutions
+→ All 6 chapters passed (model preset reports 109.50 M params).
+```

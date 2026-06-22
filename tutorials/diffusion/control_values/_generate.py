@@ -125,7 +125,12 @@ def main(overwrite: bool = True) -> None:
         torch.save(cra_out, cra_path)
     else:
         expected = torch.load(cra_path)
-        assert torch.allclose(cra_out, expected), (
+        # ``centre_random_augmentation(centre_only=True)`` subtracts the mean,
+        # which for our ramp input gives a row of "true zero" that is in fact
+        # ~5e-8 due to reduction order — well below numerical relevance, but
+        # above ``torch.allclose``'s default atol=1e-8. Loosen atol so the
+        # check is robust across BLAS backends. (rtol=1e-5 default is kept.)
+        assert torch.allclose(cra_out, expected, atol=1e-7), (
             "centre_random_augmentation(centre_only=True) output mismatch"
         )
 
