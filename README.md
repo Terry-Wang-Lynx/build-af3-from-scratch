@@ -35,7 +35,7 @@ build-af3-from-scratch/
 |---|---|---|
 | `solutions/` | 完整参考实现 | 写完 tutorials 后对照检查；学习时尽量不要先看。 |
 | `tutorials/` | `prepare_tutorials.py` 从 `solutions/` 自动剥出的填空版：所有被包裹的 `forward` 内容替换成 `pass`，TODO 上方保留详细伪代码 | 学生按 TODO 一步步把空填上。 |
-| `lessons/` | 每章的教学 markdown **(WIP，正在补写)** | 想了解算法 / 数学背景时阅读。当前先看 notebook 里的 TODO 伪代码即可。 |
+| `lessons/` | 每章的教学 markdown（7 章已成稿，持续打磨）| 想了解算法 / 数学背景时阅读，配合 notebook 内的 TODO 伪代码使用。 |
 
 重新生成填空版：
 
@@ -105,7 +105,9 @@ python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
    并报告 pLDDT / pTM。
 
 6. **对答案**：把你写完的实现与 `solutions/` 对比，看看哪里写得不够干净。
-   两边推理输出应一致（state_dict 完全兼容）。
+   两边推理输出应一致（state_dict 基本兼容；tiny / default checkpoint 会
+   留一个未启用的 `input_embedder.linear_esm.weight` 键被安全忽略，详见
+   `solutions/model/inference.py::load_checkpoint`）。
 
 ## 单元测试 (control values)
 
@@ -158,7 +160,8 @@ pip install --upgrade pip
 pip install torch torchvision \
             rdkit biopython biotite modelcif gemmi pdbeccdutils \
             ml-collections scipy pandas scikit-learn scikit-learn-extra \
-            matplotlib ipykernel ipywidgets py3dmol icecream fair-esm
+            matplotlib ipykernel ipywidgets py3dmol icecream fair-esm \
+            nbformat nbconvert
 ```
 
 ### 2. 下载权重
@@ -180,6 +183,7 @@ cd solutions
 LAYERNORM_TYPE=torch python -m model.inference \
     --input_json examples/example.json \
     --dump_dir   ./out \
+    --ckpt_dir   ../checkpoints \
     --device     mps            # 或 cpu / cuda
 ```
 

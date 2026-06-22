@@ -36,7 +36,7 @@ fully-qualified form `from <chapter>.<file> import <Class>`.
 |---|---|---|
 | `solutions/` | Complete reference implementation | Read it after you've done your own pass — try not to peek beforehand. |
 | `tutorials/` | Auto-extracted from `solutions/` by `prepare_tutorials.py`. Every wrapped `forward` body is replaced with `pass`, and the TODO block above it carries detailed pseudocode. | Where you fill in the blanks. |
-| `lessons/` | Per-chapter teaching markdown **(WIP, being written)** | For algorithm / math background. Until each chapter is written up, the inline TODO pseudocode in the notebooks is your reference. |
+| `lessons/` | Per-chapter teaching markdown (7 chapters drafted, still polishing) | Read for algorithm / math background, alongside the in-notebook TODO pseudocode. |
 
 Regenerate the blanks:
 
@@ -117,7 +117,10 @@ takes ~0.5–2 hours.
 
 6. **Compare with the reference.** Diff your finished `tutorials/`
    against `solutions/` to spot any rougher edges in your version.
-   Inference output should match (state_dict is fully compatible).
+   Inference output should match (state_dict is largely compatible; the
+   tiny / default checkpoint carries one disabled
+   `input_embedder.linear_esm.weight` key that is safely ignored — see
+   `solutions/model/inference.py::load_checkpoint`).
 
 ## Per-module unit tests (control values)
 
@@ -173,7 +176,8 @@ pip install --upgrade pip
 pip install torch torchvision \
             rdkit biopython biotite modelcif gemmi pdbeccdutils \
             ml-collections scipy pandas scikit-learn scikit-learn-extra \
-            matplotlib ipykernel ipywidgets py3dmol icecream fair-esm
+            matplotlib ipykernel ipywidgets py3dmol icecream fair-esm \
+            nbformat nbconvert
 ```
 
 ### 2. Download a checkpoint
@@ -196,6 +200,7 @@ cd solutions
 LAYERNORM_TYPE=torch python -m model.inference \
     --input_json examples/example.json \
     --dump_dir   ./out \
+    --ckpt_dir   ../checkpoints \
     --device     mps            # or cpu / cuda
 ```
 
