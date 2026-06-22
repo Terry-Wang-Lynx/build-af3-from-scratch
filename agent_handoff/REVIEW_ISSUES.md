@@ -70,6 +70,8 @@ Result:
 
 Priority: high
 
+Status: resolved
+
 Command:
 
 ```bash
@@ -133,6 +135,8 @@ rationale so future authors don't reintroduce the ramp.
 
 Priority: high
 
+Status: resolved
+
 Relevant file:
 
 - `README.md`
@@ -164,6 +168,8 @@ flag in the `### 3. 运行推理` / `### 3. Run inference` blocks of both
 ### 3. Weight compatibility wording is too strong
 
 Priority: medium
+
+Status: resolved
 
 Relevant files:
 
@@ -204,6 +210,8 @@ if a real divergence shows up.
 
 Priority: low
 
+Status: resolved
+
 Relevant files:
 
 - `README.md`
@@ -227,6 +235,8 @@ drafted, still polishing".
 ### 5. Optional: notebook-level checker depends on nbconvert
 
 Priority: low
+
+Status: resolved
 
 Local `venv_protenix` has core runtime dependencies but misses `nbconvert`, so
 `check_solutions.py` cannot run there. The conda env files include
