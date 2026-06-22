@@ -344,7 +344,7 @@ LAYERNORM_TYPE=torch python generate_control_values.py --verify --src solutions
 
 Priority: medium
 
-Status: open
+Status: resolved
 
 Issue 3 softened the workflow section wording from "state_dict 完全兼容" /
 "fully compatible" to "基本兼容 / largely compatible" because tiny/default
