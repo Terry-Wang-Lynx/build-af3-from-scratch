@@ -201,18 +201,29 @@ pip install torch torchvision \
 #   pip install lmdb orjson
 ```
 
-Optional: if you want Claude Code to help with code reading, questions, or
-filling in the exercises, install it with the
-[official recommended installer](https://docs.anthropic.com/en/docs/claude-code/setup):
+Optional: if you use a coding agent such as Claude Code, Codex, or Cursor, paste
+this prompt into it to have it set up and verify the project for you:
 
-```bash
-curl -fsSL https://claude.ai/install.sh | bash
-```
+```text
+Please install and verify this teaching project from the current repository root.
 
-Alternatively, install it globally through npm:
+Prefer the conda environments from the README: use
+`conda env create -f environment_mac.yml` on macOS / Apple Silicon, or
+`conda env create -f environment_cpu.yml` on Linux / CPU-only machines. If conda
+is unavailable, use the README's venv + pip install path instead.
 
-```bash
-npm install -g @anthropic-ai/claude-code
+After dependencies are installed, download the Protenix Tiny checkpoint into
+`checkpoints/`, then run:
+
+1. `python prepare_tutorials.py --clean`
+2. `python generate_control_values.py --verify --src solutions`
+3. `python check_solutions.py --src solutions --with-overview --timeout 300 --fail-fast`
+
+If dependency or path errors appear, fix the environment first using the README
+and the error messages; avoid changing the teaching code. Do not commit
+`checkpoints/`, test outputs, or temporary notebook artifacts. At the end, tell
+me which commands you ran, whether everything passed, and where the generated
+CIF / JSON outputs are.
 ```
 
 ### 2. Download a checkpoint

@@ -179,17 +179,26 @@ pip install torch torchvision \
 #   pip install lmdb orjson
 ```
 
-可选：如果你想用 Claude Code 辅助阅读代码、提问或填写练习，可按
-[官方推荐方式](https://docs.anthropic.com/en/docs/claude-code/setup)安装：
+可选：如果你使用 Claude Code / Codex / Cursor 这类 coding agent，可以把下面
+这段 prompt 贴给它，让它帮你完成安装和验证：
 
-```bash
-curl -fsSL https://claude.ai/install.sh | bash
-```
+```text
+请在当前仓库根目录帮我安装并验证这个教学项目。
 
-也可以用 npm 全局安装：
+优先按 README 使用 conda 环境：macOS / Apple Silicon 用
+`conda env create -f environment_mac.yml`，Linux / CPU 环境用
+`conda env create -f environment_cpu.yml`；如果没有 conda，再按 README
+里的 venv + pip 方案安装依赖。
 
-```bash
-npm install -g @anthropic-ai/claude-code
+安装后下载 Protenix Tiny checkpoint 到 `checkpoints/`，然后依次运行：
+
+1. `python prepare_tutorials.py --clean`
+2. `python generate_control_values.py --verify --src solutions`
+3. `python check_solutions.py --src solutions --with-overview --timeout 300 --fail-fast`
+
+如果遇到依赖或路径错误，请先根据 README 和报错修环境，尽量不要修改教学代码。
+不要把 `checkpoints/`、测试输出或 notebook 临时产物提交到 Git。最后告诉我执行过
+哪些命令、是否全部通过、以及生成的 CIF / JSON 输出在哪里。
 ```
 
 ### 2. 下载权重
