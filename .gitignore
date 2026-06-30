@@ -42,3 +42,6 @@ checkpoints/
 protenix_upstream/
 alphafold-decoded-main/
 af3/
+
+# Internal agent ↔ agent review communication — NOT for public release
+agent_handoff/

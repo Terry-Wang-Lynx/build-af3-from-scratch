@@ -201,6 +201,20 @@ pip install torch torchvision \
 #   pip install lmdb orjson
 ```
 
+Optional: if you want Claude Code to help with code reading, questions, or
+filling in the exercises, install it with the
+[official recommended installer](https://docs.anthropic.com/en/docs/claude-code/setup):
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+Alternatively, install it globally through npm:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
 ### 2. Download a checkpoint
 
 We use the official Protenix-Tiny (~110 M params, MSA-based):

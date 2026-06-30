@@ -179,6 +179,19 @@ pip install torch torchvision \
 #   pip install lmdb orjson
 ```
 
+可选：如果你想用 Claude Code 辅助阅读代码、提问或填写练习，可按
+[官方推荐方式](https://docs.anthropic.com/en/docs/claude-code/setup)安装：
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+也可以用 npm 全局安装：
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
 ### 2. 下载权重
 
 用官方 Protenix-Tiny（约 110 M 参数，MSA 版）：
