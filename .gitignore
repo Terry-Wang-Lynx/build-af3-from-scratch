@@ -14,6 +14,8 @@ test_outputs/
 out_dir/
 output/
 out_demo/
+solutions/out/
+tutorials/out/
 prediction.mmcif
 prediction.cif
 af3_*_out/

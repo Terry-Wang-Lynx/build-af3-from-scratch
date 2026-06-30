@@ -23,9 +23,12 @@ This is the AF3 educational project's analogue of the AF2 reference's
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 # Notebook execution deps are optional at the system level (they ship in the
@@ -36,6 +39,7 @@ from pathlib import Path
 # 老旧或精简的 venv 里可能没装）。这里给出简明可操作的提示，避免直接抛
 # ModuleNotFoundError 让用户看不懂。
 try:
+    import ipykernel  # noqa: F401
     import nbformat
     from nbconvert.preprocessors import ExecutePreprocessor
 except ModuleNotFoundError as exc:  # pragma: no cover - environment guard
@@ -72,7 +76,55 @@ CHAPTER_NOTEBOOKS = [
 OVERVIEW_NOTEBOOK = "model/overview.ipynb"
 
 
-def execute(nb_path: Path, cwd: Path, timeout: int) -> tuple[bool, str]:
+@contextmanager
+def current_python_kernel():
+    """Expose ``sys.executable`` as a temporary Jupyter kernel.
+
+    ``python3`` in a user's global kernelspec can point at a different venv,
+    which makes notebook checks appear to pass while testing the wrong
+    environment. This temporary kernelspec keeps the checker tied to the
+    interpreter that launched it.
+    """
+    kernel_name = "af3-current-python"
+    with tempfile.TemporaryDirectory(prefix="af3-kernel-") as tmp:
+        kernel_dir = Path(tmp) / "kernels" / kernel_name
+        kernel_dir.mkdir(parents=True)
+        (kernel_dir / "kernel.json").write_text(
+            json.dumps(
+                {
+                    "argv": [
+                        sys.executable,
+                        "-m",
+                        "ipykernel_launcher",
+                        "-f",
+                        "{connection_file}",
+                    ],
+                    "display_name": f"Python ({Path(sys.executable).parent})",
+                    "language": "python",
+                },
+                indent=2,
+            )
+        )
+
+        old_jupyter_path = os.environ.get("JUPYTER_PATH")
+        os.environ["JUPYTER_PATH"] = (
+            tmp if not old_jupyter_path else tmp + os.pathsep + old_jupyter_path
+        )
+        try:
+            yield kernel_name
+        finally:
+            if old_jupyter_path is None:
+                os.environ.pop("JUPYTER_PATH", None)
+            else:
+                os.environ["JUPYTER_PATH"] = old_jupyter_path
+
+
+def execute(
+    nb_path: Path,
+    cwd: Path,
+    timeout: int,
+    kernel_name: str,
+) -> tuple[bool, str]:
     """Run ``nb_path`` in working dir ``cwd``. Returns (ok, message)."""
     try:
         with open(nb_path) as f:
@@ -80,7 +132,7 @@ def execute(nb_path: Path, cwd: Path, timeout: int) -> tuple[bool, str]:
     except FileNotFoundError as e:
         return False, f"missing notebook: {e}"
 
-    ep = ExecutePreprocessor(timeout=timeout, kernel_name="python3")
+    ep = ExecutePreprocessor(timeout=timeout, kernel_name=kernel_name)
     try:
         ep.preprocess(nb, {"metadata": {"path": str(cwd)}})
     except Exception as e:
@@ -144,20 +196,31 @@ def main() -> int:
             return 2
 
     print(f"checking {len(notebooks)} notebook(s) under {src_dir}/")
+    print(f"using notebook kernel from: {sys.executable}")
     failures: list[tuple[str, str]] = []
-    for rel in notebooks:
-        nb_path = src_dir / rel
-        t0 = time.time()
-        print(f"  [{time.strftime('%H:%M:%S')}] running {rel} … ", end="", flush=True)
-        ok, msg = execute(nb_path, cwd=src_dir, timeout=args.timeout)
-        elapsed = time.time() - t0
-        if ok:
-            print(f"PASS  ({elapsed:.1f}s)")
-        else:
-            print(f"FAIL  ({elapsed:.1f}s)\n         {msg}")
-            failures.append((rel, msg))
-            if args.fail_fast:
-                break
+    with current_python_kernel() as kernel_name:
+        for rel in notebooks:
+            nb_path = src_dir / rel
+            t0 = time.time()
+            print(
+                f"  [{time.strftime('%H:%M:%S')}] running {rel} … ",
+                end="",
+                flush=True,
+            )
+            ok, msg = execute(
+                nb_path,
+                cwd=src_dir,
+                timeout=args.timeout,
+                kernel_name=kernel_name,
+            )
+            elapsed = time.time() - t0
+            if ok:
+                print(f"PASS  ({elapsed:.1f}s)")
+            else:
+                print(f"FAIL  ({elapsed:.1f}s)\n         {msg}")
+                failures.append((rel, msg))
+                if args.fail_fast:
+                    break
 
     print()
     if failures:

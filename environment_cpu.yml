@@ -17,7 +17,7 @@ dependencies:
   # chemistry / structure I/O
   - rdkit
   - biopython
-  - biotite
+  - biotite>=1.3,<1.5
   - modelcif
   - gemmi
   - pdbeccdutils

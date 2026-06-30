@@ -196,7 +196,7 @@ Or venv + pip:
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
 pip install torch torchvision \
-            rdkit biopython biotite modelcif gemmi pdbeccdutils \
+            rdkit biopython "biotite>=1.3,<1.5" modelcif gemmi pdbeccdutils \
             ml-collections scipy pandas scikit-learn \
             matplotlib ipykernel ipywidgets py3dmol icecream fair-esm \
             nbformat nbconvert \
@@ -205,6 +205,16 @@ pip install torch torchvision \
 # (code falls back to stdlib json if orjson is absent):
 #   pip install lmdb orjson
 ```
+
+If you open notebooks manually, register the current environment as a dedicated
+kernel and select `Python (af3)` in Jupyter:
+
+```bash
+python -m ipykernel install --user --name af3 --display-name "Python (af3)"
+```
+
+The top-level `check_solutions.py` automatically uses the Python interpreter
+that runs it, so it does not rely on the global `python3` kernel.
 
 Optional: if you use a coding agent such as Claude Code, Codex, or Cursor, paste
 this prompt into it to have it set up and verify the project for you:
@@ -227,10 +237,12 @@ After dependencies are installed, download the Protenix Tiny checkpoint into
 3. `python check_solutions.py --src solutions --with-overview --timeout 300 --fail-fast`
 
 If dependency or path errors appear, fix the environment first using the README
-and the error messages; avoid changing the teaching code. Do not commit
-`checkpoints/`, test outputs, or temporary notebook artifacts. At the end, tell
-me which commands you ran, whether everything passed, and where the generated
-CIF / JSON outputs are.
+and the error messages; avoid changing the teaching code. `check_solutions.py`
+should execute notebooks with the current environment's Python; if you open
+Jupyter manually, select the `Python (af3)` kernel. Do not commit `checkpoints/`,
+test outputs, or temporary notebook artifacts. At the end, tell me which
+commands you ran, whether everything passed, and where the generated CIF / JSON
+outputs are.
 ```
 
 ### 2. Download a checkpoint

@@ -174,7 +174,7 @@ conda activate af3
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
 pip install torch torchvision \
-            rdkit biopython biotite modelcif gemmi pdbeccdutils \
+            rdkit biopython "biotite>=1.3,<1.5" modelcif gemmi pdbeccdutils \
             ml-collections scipy pandas scikit-learn \
             matplotlib ipykernel ipywidgets py3dmol icecream fair-esm \
             nbformat nbconvert \
@@ -182,6 +182,16 @@ pip install torch torchvision \
 # 可选加速：.lmdb 输入需要 lmdb，更快的 JSON 解析可装 orjson（缺失会自动回退 stdlib json）
 #   pip install lmdb orjson
 ```
+
+如果你要手动打开 notebook，建议把当前环境注册成独立 kernel，并在 Jupyter
+里选择 `Python (af3)`：
+
+```bash
+python -m ipykernel install --user --name af3 --display-name "Python (af3)"
+```
+
+顶层 `check_solutions.py` 会自动使用运行它的当前 Python，不依赖全局 `python3`
+kernel。
 
 可选：如果你使用 Claude Code / Codex / Cursor 这类 coding agent，可以把下面
 这段 prompt 贴给它，让它帮你完成安装和验证：
@@ -203,7 +213,8 @@ macOS / Apple Silicon，请确认 `platform` 是 `osx-arm64`；如果显示 `osx
 3. `python check_solutions.py --src solutions --with-overview --timeout 300 --fail-fast`
 
 如果遇到依赖或路径错误，请先根据 README 和报错修环境，尽量不要修改教学代码。
-不要把 `checkpoints/`、测试输出或 notebook 临时产物提交到 Git。最后告诉我执行过
+注意 `check_solutions.py` 应该使用当前环境的 Python 执行 notebook；如果手动打开
+Jupyter，请选择 `Python (af3)` kernel。不要把 `checkpoints/`、测试输出或 notebook 临时产物提交到 Git。最后告诉我执行过
 哪些命令、是否全部通过、以及生成的 CIF / JSON 输出在哪里。
 ```
 
