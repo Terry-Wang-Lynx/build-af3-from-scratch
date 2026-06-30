@@ -150,6 +150,10 @@ python generate_control_values.py --verify --src tutorials
 
 ### 1. 安装
 
+推荐使用 Miniforge / conda-forge。Mac / Apple Silicon 上先确认 `conda info`
+里的 `platform` 是 `osx-arm64`；如果显示 `osx-64`，说明当前 shell 用的是
+Intel/Rosetta 版 Anaconda，请切到 arm64 Miniforge 再创建环境。
+
 Mac / Apple Silicon：
 
 ```bash
@@ -171,7 +175,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
 pip install torch torchvision \
             rdkit biopython biotite modelcif gemmi pdbeccdutils \
-            ml-collections scipy pandas scikit-learn scikit-learn-extra \
+            ml-collections scipy pandas scikit-learn \
             matplotlib ipykernel ipywidgets py3dmol icecream fair-esm \
             nbformat nbconvert \
             optree requests packaging typing-extensions
@@ -185,8 +189,10 @@ pip install torch torchvision \
 ```text
 请在当前仓库根目录帮我安装并验证这个教学项目。
 
-优先按 README 使用 conda 环境：macOS / Apple Silicon 用
-`conda env create -f environment_mac.yml`，Linux / CPU 环境用
+优先按 README 使用 Miniforge / conda-forge 环境。先运行 `conda info`，如果是
+macOS / Apple Silicon，请确认 `platform` 是 `osx-arm64`；如果显示 `osx-64`，
+请切到 arm64 Miniforge 后再继续。macOS / Apple Silicon 用
+`conda env create -f environment_mac.yml`，Linux / CPU-only 环境用
 `conda env create -f environment_cpu.yml`；如果没有 conda，再按 README
 里的 venv + pip 方案安装依赖。
 

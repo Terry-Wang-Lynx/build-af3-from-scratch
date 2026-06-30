@@ -171,6 +171,11 @@ The `.pt` files are tiny (KB-sized) and committed alongside the source.
 
 ### 1. Install
 
+Prefer Miniforge / conda-forge. On Mac / Apple Silicon, first check that
+`conda info` reports `platform: osx-arm64`; if it reports `osx-64`, your shell is
+using an Intel/Rosetta Anaconda and you should switch to an arm64 Miniforge
+before creating the environment.
+
 Mac / Apple Silicon:
 
 ```bash
@@ -192,7 +197,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
 pip install torch torchvision \
             rdkit biopython biotite modelcif gemmi pdbeccdutils \
-            ml-collections scipy pandas scikit-learn scikit-learn-extra \
+            ml-collections scipy pandas scikit-learn \
             matplotlib ipykernel ipywidgets py3dmol icecream fair-esm \
             nbformat nbconvert \
             optree requests packaging typing-extensions
@@ -207,7 +212,9 @@ this prompt into it to have it set up and verify the project for you:
 ```text
 Please install and verify this teaching project from the current repository root.
 
-Prefer the conda environments from the README: use
+Prefer the Miniforge / conda-forge environments from the README. First run
+`conda info`; on macOS / Apple Silicon, make sure `platform` is `osx-arm64`. If
+it reports `osx-64`, switch to an arm64 Miniforge before continuing. Use
 `conda env create -f environment_mac.yml` on macOS / Apple Silicon, or
 `conda env create -f environment_cpu.yml` on Linux / CPU-only machines. If conda
 is unavailable, use the README's venv + pip install path instead.

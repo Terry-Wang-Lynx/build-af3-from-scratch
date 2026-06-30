@@ -2,6 +2,7 @@ name: af3
 channels:
   - pytorch
   - conda-forge
+  - nodefaults
 dependencies:
   - python=3.12
   - pip
@@ -24,7 +25,6 @@ dependencies:
   - scipy
   - pandas
   - scikit-learn
-  - scikit-learn-extra
   - numpy>=2
   - networkx
   # config / utilities
