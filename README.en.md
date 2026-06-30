@@ -68,6 +68,18 @@ Recommended 6-step workflow over 7 chapters; chapter 0 is a **read-only
 tour** (no blanks to fill), the other six are real labs. Each chapter
 takes ~0.5–2 hours.
 
+A pragmatic learning mode: do not make "rewrite every line from scratch until it
+matches the reference" the main goal. AF3 / Protenix has a long data flow, and a
+lot of the difficulty is in tensor shapes, feature keys, mask broadcasting, and
+checkpoint compatibility; hand-typing those paths can turn into mechanical
+debugging. Read the lesson / notebook first, understand why the module exists,
+what tensors go in and out, and where it connects to the trunk. Once that is
+clear, it is perfectly reasonable to copy the corresponding implementation from
+`solutions/` into `tutorials/`, run the checks, and then read the code and test
+outputs. The main value of this repo is building a structured mental model of
+AF3, not proving that you can reproduce the whole engineering pipeline from
+memory.
+
 1. **Clone + generate the blanks**
 
    ```bash

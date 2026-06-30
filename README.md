@@ -61,6 +61,14 @@ python prepare_tutorials.py --clean  # 先清空 tutorials/ 再生成
 推荐按下面 6 步走，章节本身共 7 个 (chapter 0 是只读 tour)；
 每一章大约 0.5 – 2 小时不等：
 
+一个更高效的学习方式：不要把目标设成「从零手写到每一行都和参考实现完全一致」。
+AF3/Protenix 的数据流很长，很多难点在张量 shape、feature key、mask 广播和
+checkpoint 兼容上；这些部分照着写很容易把时间花在机械 debug 上。建议先读
+lesson / notebook，弄清每个模块为什么存在、输入输出张量是什么、它在主干数据流中
+接到哪里；理解之后可以直接把 `solutions/` 中对应实现复制到 `tutorials/` 跑通，
+再回头读代码和测试输出。这个项目的主要价值是帮你建立 AF3 的结构化心智模型，而不是
+考你能不能凭记忆复刻整条工程管线。
+
 1. **拉取仓库 + 生成填空版**
 
    ```bash
